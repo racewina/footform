@@ -1,0 +1,217 @@
+// ---- Dixon–Coles-style bivariate Poisson model ------------------------------
+//
+// Every market is read off ONE scoreline distribution P(i,j) instead of pricing
+// the match result with one formula and the goal markets with another. The old
+// 1X2 was an untuned strength-ratio heuristic that could disagree with its own
+// goal numbers; backtest calibration showed it (and the independence-assuming
+// BTTS) were the weak links. Here:
+//   • Expected goals use the Dixon–Coles multiplicative form, opponent-adjusted
+//     with each side's venue-specific scoring/conceding rates.
+//   • The low-score dependence correction τ(i,j;ρ) fixes independent Poisson's
+//     well-known under-counting of 0-0/1-1 and over-counting of 1-0/0-1.
+//   • Match result, Over 2.5, BTTS and team-goals all come from the same grid,
+//     so they are mutually consistent by construction.
+//
+// CAVEAT: textbook Dixon–Coles fits attack/defence ratings for every team by
+// maximum likelihood across a whole league. We don't persist league data (no
+// DB), so we approximate each team's ratings from its own recent form, shrunk
+// toward the league average for small samples. Same model structure, lighter
+// inputs — an honest step up from the heuristic, not the full league fit.
+//
+// SECOND MODEL: when season Elo ratings are supplied (see elo.js), we derive a
+// second pair of expected goals from the rating gap and BLEND it 50/50 with the
+// form-based λ before building the grid. The two models see strength
+// differently — form looks only at the last 6 games, Elo carries the whole
+// season's results forward — so averaging them smooths the blind spots of each.
+
+import { eloExpectedGoals } from "./elo.js";
+
+// Average goals scored by the HOME side and the AWAY side of a match. They
+// double as the conceding baselines (a home side's goals-for equals the away
+// side's goals-against), and the home/away gap encodes home advantage directly
+// — so no separate home-advantage multiplier is needed (it would double-count).
+const HOME_BASE = 1.45;
+const AWAY_BASE = 1.15;
+const RHO = -0.13; // Dixon–Coles low-score dependence parameter
+const SHRINK_K = 3; // pseudo-games pulling thin samples toward the baseline
+const MAX_GOALS = 10; // scoreline grid truncation
+const BLEND_FORM_WEIGHT = 0.5; // form vs Elo λ weighting when both available
+
+function poissonP(k, lambda) {
+  let fact = 1;
+  for (let i = 2; i <= k; i++) fact *= i;
+  return (Math.exp(-lambda) * Math.pow(lambda, k)) / fact;
+}
+
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+
+// Pull a per-game rate toward a baseline: with few games the estimate leans on
+// the prior, with many it trusts the data.
+function shrunkRate(avgPerGame, games, baseline) {
+  return (games * avgPerGame + SHRINK_K * baseline) / (games + SHRINK_K);
+}
+
+// Dixon–Coles correction for the four low-score cells independent Poisson
+// misprices. With ρ<0 it lifts 0-0/1-1 and trims 1-0/0-1, matching real games.
+function tau(i, j, lh, la, rho) {
+  if (i === 0 && j === 0) return 1 - lh * la * rho;
+  if (i === 0 && j === 1) return 1 + lh * rho;
+  if (i === 1 && j === 0) return 1 + la * rho;
+  if (i === 1 && j === 1) return 1 - rho;
+  return 1;
+}
+
+// Build the full P(i,j) scoreline grid for the two expected-goal rates and read
+// every market off it, guaranteeing match-result and goal markets agree.
+function marketsFromGoals(lambdaHome, lambdaAway) {
+  const ph = [];
+  const pa = [];
+  for (let k = 0; k <= MAX_GOALS; k++) {
+    ph[k] = poissonP(k, lambdaHome);
+    pa[k] = poissonP(k, lambdaAway);
+  }
+
+  let sum = 0, homeWin = 0, draw = 0, awayWin = 0, over25 = 0, btts = 0;
+  let home1 = 0, home2 = 0, away1 = 0, away2 = 0;
+  for (let i = 0; i <= MAX_GOALS; i++) {
+    for (let j = 0; j <= MAX_GOALS; j++) {
+      const p = ph[i] * pa[j] * tau(i, j, lambdaHome, lambdaAway, RHO);
+      sum += p;
+      if (i > j) homeWin += p;
+      else if (i === j) draw += p;
+      else awayWin += p;
+      if (i + j >= 3) over25 += p;
+      if (i >= 1 && j >= 1) btts += p;
+      if (i >= 1) home1 += p;
+      if (i >= 2) home2 += p;
+      if (j >= 1) away1 += p;
+      if (j >= 2) away2 += p;
+    }
+  }
+
+  const norm = (x) => x / sum;
+  const pct = (x) => Math.round(clamp(norm(x), 0, 1) * 100);
+  const homePct = norm(homeWin);
+  const awayPct = norm(awayWin);
+
+  return {
+    probs: {
+      home: Math.round(homePct * 100),
+      draw: Math.round(norm(draw) * 100),
+      away: Math.round(awayPct * 100),
+    },
+    markets: {
+      win: Math.round(Math.max(homePct, awayPct) * 100), // favourite's win prob (%)
+      winner: homePct >= awayPct ? "home" : "away",
+      home1Plus: pct(home1),
+      home2Plus: pct(home2),
+      away1Plus: pct(away1),
+      away2Plus: pct(away2),
+      over25: pct(over25),
+      btts: pct(btts),
+      expectedGoals: +(lambdaHome + lambdaAway).toFixed(2),
+    },
+  };
+}
+
+function parseFormFromEvents(events, teamId) {
+  // Provider order isn't guaranteed; sort most-recent-first so we take the
+  // genuine last 6, not the oldest 6.
+  const ordered = [...events].sort(
+    (a, b) => (b.startTimestamp ?? 0) - (a.startTimestamp ?? 0)
+  );
+  const results = [];
+  for (const event of ordered) {
+    if (event.status?.type !== "finished") continue;
+    const isHome = event.homeTeam?.id === teamId;
+    const homeScore = event.homeScore?.current ?? 0;
+    const awayScore = event.awayScore?.current ?? 0;
+    const goalsFor = isHome ? homeScore : awayScore;
+    const goalsAgainst = isHome ? awayScore : homeScore;
+    let outcome;
+    if (goalsFor > goalsAgainst) outcome = "W";
+    else if (goalsFor < goalsAgainst) outcome = "L";
+    else outcome = "D";
+    results.push({ outcome, goalsFor, goalsAgainst, isHome });
+    if (results.length >= 6) break;
+  }
+  return results;
+}
+
+function calcTeamScore(form, venueFilter) {
+  const relevant = venueFilter
+    ? form.filter((m) => m.isHome === venueFilter.isHome)
+    : form;
+
+  if (relevant.length === 0) return { score: 0.5, form: form.slice(0, 6), goalsFor: 0, goalsAgainst: 0, gamesPlayed: 0 };
+
+  const points = relevant.reduce((acc, m) => acc + (m.outcome === "W" ? 3 : m.outcome === "D" ? 1 : 0), 0);
+  const maxPoints = relevant.length * 3;
+  const ppg = maxPoints > 0 ? points / maxPoints : 0;
+
+  const goalsFor = relevant.reduce((a, m) => a + m.goalsFor, 0) / relevant.length;
+  const goalsAgainst = relevant.reduce((a, m) => a + m.goalsAgainst, 0) / relevant.length;
+
+  const attackScore = Math.min(goalsFor / 2.5, 1);
+  const defenseScore = Math.max(1 - goalsAgainst / 2.5, 0);
+
+  const score = ppg * 0.5 + attackScore * 0.25 + defenseScore * 0.25;
+
+  return { score, form: form.slice(0, 6), goalsFor, goalsAgainst, gamesPlayed: relevant.length };
+}
+
+export function computePrediction(homeTeamForm, awayTeamForm, elo = null) {
+  const homeStats = calcTeamScore(homeTeamForm, { isHome: true });
+  const awayStats = calcTeamScore(awayTeamForm, { isHome: false });
+
+  // Venue-specific, opponent-adjusted expected goals (Dixon–Coles form). Each
+  // rate is shrunk toward its baseline so thin samples don't run wild:
+  //   • a side's goals-for shrinks toward how much that side normally scores,
+  //   • its goals-against toward how much that side normally concedes,
+  // where home-scoring ≈ away-conceding (HOME_BASE) and vice versa (AWAY_BASE).
+  const hFor = shrunkRate(homeStats.goalsFor, homeStats.gamesPlayed, HOME_BASE);
+  const hAga = shrunkRate(homeStats.goalsAgainst, homeStats.gamesPlayed, AWAY_BASE);
+  const aFor = shrunkRate(awayStats.goalsFor, awayStats.gamesPlayed, AWAY_BASE);
+  const aAga = shrunkRate(awayStats.goalsAgainst, awayStats.gamesPlayed, HOME_BASE);
+
+  // home attack × away defence, pivoted on the home-side baseline (and likewise
+  // for the away side). Dividing by the baseline keeps an average match at the
+  // realistic ~1.45 / ~1.15 split, with home advantage already baked in.
+  let lambdaHome = (hFor * aAga) / HOME_BASE;
+  let lambdaAway = (aFor * hAga) / AWAY_BASE;
+  let model = "form";
+
+  // Blend in the Elo view when season ratings are supplied. Both models output
+  // a (λhome, λaway) pair; we weight-average them so the final grid reflects
+  // recent form AND season-long strength.
+  if (elo && elo.home != null && elo.away != null) {
+    const eloLambdas = eloExpectedGoals(elo.home, elo.away, HOME_BASE + AWAY_BASE);
+    const w = BLEND_FORM_WEIGHT;
+    lambdaHome = w * lambdaHome + (1 - w) * eloLambdas.lambdaHome;
+    lambdaAway = w * lambdaAway + (1 - w) * eloLambdas.lambdaAway;
+    model = "blend";
+  }
+
+  lambdaHome = clamp(lambdaHome, 0.2, 4);
+  lambdaAway = clamp(lambdaAway, 0.2, 4);
+
+  const { probs, markets } = marketsFromGoals(lambdaHome, lambdaAway);
+
+  const totalGames = homeStats.gamesPlayed + awayStats.gamesPlayed;
+  const confidence = totalGames >= 8 ? "high" : totalGames >= 4 ? "medium" : "low";
+
+  return {
+    ...probs,
+    confidence,
+    model,
+    homeForm: homeStats.form.map((m) => m.outcome),
+    awayForm: awayStats.form.map((m) => m.outcome),
+    homeGoalsFor: +homeStats.goalsFor.toFixed(1),
+    homeGoalsAgainst: +homeStats.goalsAgainst.toFixed(1),
+    awayGoalsFor: +awayStats.goalsFor.toFixed(1),
+    awayGoalsAgainst: +awayStats.goalsAgainst.toFixed(1),
+    markets,
+  };
+}
+
+export { parseFormFromEvents };

@@ -1,0 +1,75 @@
+:root {
+  --bg: #0e1116;
+  --bg2: #151a21;
+  --bg3: #1c232c;
+  --border: #262e39;
+  --text: #e8edf2;
+  --text2: #9aa6b2;
+  --text3: #5f6b78;
+  --accent: #3ea6ff;
+  --win: #2ecc71;
+  --draw: #f1c40f;
+  --loss: #e74c3c;
+  --font-display: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+/* --- Responsive sidebar drawer ---
+   On desktop the leagues sidebar is a static column and the hamburger is
+   hidden. On narrow screens the sidebar collapses off-canvas and slides in
+   when the ☰ button is tapped; tapping the overlay closes it. */
+@media (max-width: 768px) {
+  .app-menu-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+  }
+  .app-sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    height: 100% !important;
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 2px 0 18px rgba(0, 0, 0, 0.45);
+  }
+  .app-sidebar.open {
+    transform: translateX(0);
+  }
+}
