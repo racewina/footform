@@ -44,6 +44,7 @@ const WORLD_CUP_ID = 1;
 // The four per-player markets, in display order.
 const PLAYER_MARKETS = [
   { key: "score", label: "Score" },
+  { key: "shotOnTarget", label: "SoT" },
   { key: "foul", label: "Foul" },
   { key: "fouled", label: "Fouled" },
   { key: "tackle", label: "Tackle" },

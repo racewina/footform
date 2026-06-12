@@ -295,7 +295,7 @@ export async function fetchPlayerSeasonStats(playerId, season) {
   if (!row) return null;
 
   const blocks = Array.isArray(row.statistics) ? row.statistics : [];
-  let minutes = 0, apps = 0, goals = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0;
+  let minutes = 0, apps = 0, goals = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0, shotsOnTarget = 0;
   let pos = null, posMinutes = -1;
   for (const b of blocks) {
     const m = b.games?.minutes || 0;
@@ -305,6 +305,7 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     foulsCommitted += b.fouls?.committed || 0;
     foulsDrawn += b.fouls?.drawn || 0;
     tackles += b.tackles?.total || 0;
+    shotsOnTarget += b.shots?.on || 0;
     // Position from whichever competition they played the most in.
     if (m > posMinutes) { posMinutes = m; pos = b.games?.position || pos; }
   }
@@ -320,5 +321,6 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     foulsCommitted,
     foulsDrawn,
     tackles,
+    shotsOnTarget,
   };
 }

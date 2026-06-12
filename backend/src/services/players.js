@@ -12,6 +12,7 @@
 //   • foul    -> fouls committed
 //   • fouled  -> fouls drawn
 //   • tackle  -> tackles
+//   • shotOnTarget -> shots on target
 //
 // CAVEAT: this is a "1+ occurrence" model under a Poisson assumption for each
 // count. It deliberately ignores opponent strength and game state — for a World
@@ -53,5 +54,6 @@ export function playerProps(stat) {
     foul: pct(onePlus(per90(stat.foulsCommitted), expMin)),
     fouled: pct(onePlus(per90(stat.foulsDrawn), expMin)),
     tackle: pct(onePlus(per90(stat.tackles), expMin)),
+    shotOnTarget: pct(onePlus(per90(stat.shotsOnTarget), expMin)),
   };
 }
