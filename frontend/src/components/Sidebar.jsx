@@ -150,6 +150,20 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.itemName}>VIP Bet</span>
           </button>
 
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "value" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("value");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>📈</span>
+            <span style={styles.itemName}>Value Bets</span>
+          </button>
+
         </nav>
       </aside>
     </>

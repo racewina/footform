@@ -324,3 +324,50 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     shotsOnTarget,
   };
 }
+
+// --- Bookmaker odds (for value betting) ------------------------------------
+//
+// Pre-match odds for one fixture across every bookmaker the feed carries. We
+// only keep the three markets our model prices cleanly off its scoreline grid —
+// Match Winner (1X2), Over/Under 2.5 goals, and Both Teams Score — and for each
+// selection we take the BEST (highest) decimal price across all books, plus
+// which book offered it. Returns null when no odds are published yet (odds
+// appear a few days out and disappear at kickoff).
+export async function fetchFixtureOdds(fixtureId) {
+  const json = await request(`/odds?fixture=${fixtureId}`);
+  const row = Array.isArray(json?.response) ? json.response[0] : null;
+  const books = row?.bookmakers;
+  if (!Array.isArray(books) || !books.length) return null;
+
+  // best[selectionKey] = { odd, book } with the highest odd seen so far.
+  const best = {};
+  const consider = (key, oddStr, bookName) => {
+    const odd = parseFloat(oddStr);
+    if (!(odd > 1)) return;
+    if (!best[key] || odd > best[key].odd) best[key] = { odd, book: bookName };
+  };
+
+  for (const bk of books) {
+    const name = bk.name || "—";
+    for (const bet of bk.bets || []) {
+      const market = bet.name;
+      for (const v of bet.values || []) {
+        const val = String(v.value);
+        if (market === "Match Winner") {
+          if (val === "Home") consider("homeWin", v.odd, name);
+          else if (val === "Draw") consider("draw", v.odd, name);
+          else if (val === "Away") consider("awayWin", v.odd, name);
+        } else if (market === "Goals Over/Under") {
+          if (val === "Over 2.5") consider("over25", v.odd, name);
+          else if (val === "Under 2.5") consider("under25", v.odd, name);
+        } else if (market === "Both Teams Score") {
+          if (val === "Yes") consider("bttsYes", v.odd, name);
+          else if (val === "No") consider("bttsNo", v.odd, name);
+        }
+      }
+    }
+  }
+
+  if (!Object.keys(best).length) return null;
+  return { bookmakers: books.length, best };
+}

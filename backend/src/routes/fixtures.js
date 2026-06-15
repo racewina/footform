@@ -10,6 +10,7 @@ import {
   fetchFixtureTeams,
   fetchTeamSquadByMinutes,
   fetchFixtureStats,
+  fetchFixtureOdds,
 } from "../services/apifootball.js";
 import { computePrediction, parseFormFromEvents } from "../services/predictions.js";
 import { playerProps } from "../services/players.js";
@@ -21,6 +22,7 @@ import {
 } from "../services/backtest.js";
 import { buildAccumulators } from "../services/accumulator.js";
 import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB } from "../services/vipbet.js";
+import { buildValueBets } from "../services/valuebets.js";
 import { buildEloModel } from "../services/elo.js";
 import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
 
@@ -182,6 +184,20 @@ async function getTeamCornerRates(teamId) {
   const rates = teamCornerRates(samples);
   cacheSet(cacheKey, rates, TTL.TEAM_FORM);
   return rates;
+}
+
+// Best-price bookmaker odds for one fixture (parsed to the markets the model
+// prices). Cached per fixture for the fixtures TTL — odds drift, but a short
+// cache keeps the day's value scan from re-hitting the feed for every viewer.
+// Returns null (also cached) when no odds are published for the fixture.
+async function getFixtureOdds(fixtureId) {
+  const cacheKey = `odds:${fixtureId}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const odds = await fetchFixtureOdds(fixtureId).catch(() => null);
+  cacheSet(cacheKey, odds || null, TTL.FIXTURES);
+  return odds;
 }
 
 // Turn a list of starters ({id,name,number,pos}) into player-prop rows by
@@ -728,6 +744,64 @@ router.get("/vip", async (req, res) => {
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[vip] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cross-league "value bets" view: for every scheduled match today, compare the
+// model's probabilities against the best bookmaker price across all books and
+// surface the positive-edge selections (model thinks it's likelier than the
+// odds imply). One odds call per upcoming fixture, cached; finished matches are
+// skipped. Sorted best-edge first.
+router.get("/value", async (req, res) => {
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+
+  const cacheKey = `value:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Reuses the per-league-day cache shared with /today, /accumulators, /vip.
+    const groups = await Promise.all(
+      LEAGUES.map((l) =>
+        buildLeagueDay(l.id, targetDate, tz).catch((e) => {
+          console.error(`[value] ${l.id}: ${e.message}`);
+          return null;
+        })
+      )
+    );
+
+    const leagues = groups
+      .filter((g) => g && g.fixtures && g.fixtures.length)
+      .map((g) => ({ league: g.league, fixtures: g.fixtures }));
+
+    const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
+
+    // Fetch odds only for upcoming, predictable fixtures (skip finished and any
+    // without a prediction). getFixtureOdds is cached per fixture; the upstream
+    // rate limiter serializes the calls so this stays within budget.
+    const oddsMap = {};
+    for (const g of leagues) {
+      for (const fx of g.fixtures) {
+        if (fx.status === "finished") continue;
+        if (!fx.prediction?.markets || fx.prediction.home == null) continue;
+        const odds = await getFixtureOdds(fx.id);
+        if (odds) oddsMap[fx.id] = odds;
+      }
+    }
+
+    const bets = buildValueBets(leagues, oddsMap);
+    const result = {
+      date: targetDate,
+      totalMatches,
+      pricedMatches: Object.keys(oddsMap).length,
+      bets,
+    };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[value] ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
