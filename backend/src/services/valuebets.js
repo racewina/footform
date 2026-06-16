@@ -73,6 +73,45 @@ export function fixtureValueBets(fx, odds) {
   return out;
 }
 
+// Map a built accumulator/VIP leg to its best bookmaker price, given the parsed
+// best-price map (apifootball.fetchFixtureOdds output) and the fixture's winner
+// side (for the match-result leg). Returns { odds, book } or null when the leg's
+// market isn't carried in the odds feed (e.g. first-half corners). The leg's
+// selection text disambiguates the two-way markets ("to score" vs "not to
+// score", "2+ goals" vs "under 2", Over vs Under, BTTS yes vs no).
+export function bestBookOddsForLeg(best, leg, winnerSide) {
+  if (!best || !leg) return null;
+  const sel = (leg.selection || "").toLowerCase();
+  let key = null;
+  switch (leg.marketKey) {
+    case "winner":
+      key = winnerSide === "home" ? "homeWin" : "awayWin";
+      break;
+    case "home1Plus":
+      key = sel.includes("not to score") ? "homeNoScore" : "homeToScore";
+      break;
+    case "away1Plus":
+      key = sel.includes("not to score") ? "awayNoScore" : "awayToScore";
+      break;
+    case "home2Plus":
+      key = sel.includes("under 2") ? "homeUnder2" : "home2Plus";
+      break;
+    case "away2Plus":
+      key = sel.includes("under 2") ? "awayUnder2" : "away2Plus";
+      break;
+    case "over25":
+      key = sel.includes("under") ? "under25" : "over25";
+      break;
+    case "btts":
+      key = sel.includes("not to score") ? "bttsNo" : "bttsYes";
+      break;
+    default:
+      return null; // corner legs etc. — no matching market in the feed
+  }
+  const priced = best[key];
+  return priced ? { odds: round2(priced.odd), book: priced.book } : null;
+}
+
 // Assemble the day's value bets across every league group, best edge first.
 // `oddsMap` is { [fixtureId]: parsedOdds }. Each group carries its league on
 // fixture._league so a flat list can still name the competition.

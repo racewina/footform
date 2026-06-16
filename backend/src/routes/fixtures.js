@@ -22,7 +22,7 @@ import {
 } from "../services/backtest.js";
 import { buildAccumulators } from "../services/accumulator.js";
 import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB } from "../services/vipbet.js";
-import { buildValueBets } from "../services/valuebets.js";
+import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { buildEloModel } from "../services/elo.js";
 import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
 
@@ -198,6 +198,38 @@ async function getFixtureOdds(fixtureId) {
   const odds = await fetchFixtureOdds(fixtureId).catch(() => null);
   cacheSet(cacheKey, odds || null, TTL.FIXTURES);
   return odds;
+}
+
+// Decorate each leg of a set of slips with the best bookmaker price for its
+// market, so the UI can show real odds next to the model's fair odds. Fetches
+// odds once per unique fixture in the slips (cached), then maps each leg to its
+// market via bestBookOddsForLeg. Legs whose market isn't in the feed (corners)
+// or whose fixture has no published odds are simply left without book prices.
+async function attachBookOddsToSlips(slips, leagues) {
+  const fxById = {};
+  for (const g of leagues || []) for (const fx of g.fixtures || []) fxById[fx.id] = fx;
+
+  const ids = new Set();
+  for (const slip of slips || []) for (const leg of slip.legs || []) ids.add(leg.matchId);
+
+  const oddsById = {};
+  for (const id of ids) {
+    const o = await getFixtureOdds(id).catch(() => null);
+    if (o) oddsById[id] = o;
+  }
+
+  for (const slip of slips || []) {
+    for (const leg of slip.legs || []) {
+      const odds = oddsById[leg.matchId];
+      const fx = fxById[leg.matchId];
+      if (!odds || !fx) continue;
+      const best = bestBookOddsForLeg(odds.best, leg, fx.prediction?.markets?.winner);
+      if (best) {
+        leg.bookOdds = best.odds;
+        leg.bookmaker = best.book;
+      }
+    }
+  }
 }
 
 // Turn a list of starters ({id,name,number,pos}) into player-prop rows by
@@ -631,6 +663,7 @@ router.get("/accumulators", async (req, res) => {
 
     const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
     const slips = buildAccumulators(leagues);
+    await attachBookOddsToSlips(slips, leagues);
 
     const result = { date: targetDate, totalMatches, slips };
     cacheSet(cacheKey, result, TTL.FIXTURES);
@@ -738,6 +771,7 @@ router.get("/vip", async (req, res) => {
     }
 
     const slips = buildVipSlips(leagues, cornerMap);
+    await attachBookOddsToSlips(slips, leagues);
 
     const result = { date: targetDate, totalMatches, slips };
     cacheSet(cacheKey, result, TTL.FIXTURES);

@@ -99,10 +99,15 @@ function Leg({ leg }) {
           <span style={styles.legSelection}>{leg.selection}</span>
           <span style={styles.legMarket}>{leg.market}</span>
         </div>
+        {leg.bookOdds != null && (
+          <span style={styles.legBook}>Best {leg.bookOdds.toFixed(2)} @ {leg.bookmaker}</span>
+        )}
       </div>
       <div style={styles.legNums}>
         <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}%</span>
-        <span style={styles.legOdds}>{leg.odds.toFixed(2)}</span>
+        <span style={styles.legOdds}>
+          {leg.bookOdds != null ? <>fair {leg.odds.toFixed(2)}</> : leg.odds.toFixed(2)}
+        </span>
       </div>
     </div>
   );
@@ -140,6 +145,7 @@ const styles = {
   legPick: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   legSelection: { fontSize: 13, fontWeight: 600, color: "var(--accent)" },
   legMarket: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, background: "var(--bg3)", borderRadius: 4, padding: "1px 6px" },
+  legBook: { fontSize: 11, color: "var(--text2)" },
   legNums: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 },
   legProb: { fontSize: 14, fontWeight: 700 },
   legOdds: { fontSize: 12, color: "var(--text2)" },

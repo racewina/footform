@@ -363,6 +363,21 @@ export async function fetchFixtureOdds(fixtureId) {
         } else if (market === "Both Teams Score") {
           if (val === "Yes") consider("bttsYes", v.odd, name);
           else if (val === "No") consider("bttsNo", v.odd, name);
+        } else if (market === "Clean Sheet - Home") {
+          // Home keeps a clean sheet ⇔ the AWAY team fails to score.
+          if (val === "No") consider("awayToScore", v.odd, name);
+          else if (val === "Yes") consider("awayNoScore", v.odd, name);
+        } else if (market === "Clean Sheet - Away") {
+          // Away keeps a clean sheet ⇔ the HOME team fails to score.
+          if (val === "No") consider("homeToScore", v.odd, name);
+          else if (val === "Yes") consider("homeNoScore", v.odd, name);
+        } else if (market === "Total - Home") {
+          // "2+ home goals" is Over 1.5 on the home team total.
+          if (val === "Over 1.5") consider("home2Plus", v.odd, name);
+          else if (val === "Under 1.5") consider("homeUnder2", v.odd, name);
+        } else if (market === "Total - Away") {
+          if (val === "Over 1.5") consider("away2Plus", v.odd, name);
+          else if (val === "Under 1.5") consider("awayUnder2", v.odd, name);
         }
       }
     }
