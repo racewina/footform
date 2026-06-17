@@ -137,6 +137,26 @@ export default function FixturesPage({ leagueId }) {
 
   const totalFixtures = groups.reduce((n, g) => n + g.fixtures.length, 0);
 
+  // The cross-league "today" view reads best as one time-ordered list rather
+  // than league-by-league. Flatten every group into a single stream, carrying
+  // each fixture's league/season so the card can still show its competition.
+  // Default sort is by kickoff; with a prediction filter active we keep the
+  // strongest-first ranking that filter implies.
+  const flatToday = isTodayView
+    ? (() => {
+        const flat = groups.flatMap((g) =>
+          g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season }))
+        );
+        if (filterMarket === "all") {
+          flat.sort((a, b) => (a.fx.startTimestamp ?? Infinity) - (b.fx.startTimestamp ?? Infinity));
+        } else {
+          const valueOf = FILTER_BY_KEY[filterMarket].value;
+          flat.sort((a, b) => valueOf(b.fx.prediction.markets) - valueOf(a.fx.prediction.markets));
+        }
+        return flat;
+      })()
+    : null;
+
   const prettyDate = date.toLocaleDateString(undefined, {
     weekday: "short", month: "short", day: "numeric",
   });
@@ -197,7 +217,19 @@ export default function FixturesPage({ leagueId }) {
               : "No matches meet this prediction filter."}
           </p>
         )}
-        {!isLoading && !isError && groups.map((g) => (
+        {!isLoading && !isError && isTodayView &&
+          flatToday.map(({ fx, league, season }) => (
+            <FixtureCard
+              key={fx.id}
+              fixture={fx}
+              league={league}
+              season={season}
+              highlight={filterMarket}
+              showLeague
+            />
+          ))}
+
+        {!isLoading && !isError && !isTodayView && groups.map((g) => (
           <div key={g.league.id} style={styles.leagueGroup}>
             <div style={styles.groupHeader}>
               <span style={{ fontSize: 16 }}>{g.league.flag}</span>
@@ -220,7 +252,7 @@ export default function FixturesPage({ leagueId }) {
   );
 }
 
-function FixtureCard({ fixture, league, season, highlight }) {
+function FixtureCard({ fixture, league, season, highlight, showLeague }) {
   const [open, setOpen] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showPlayers, setShowPlayers] = useState(false);
@@ -243,6 +275,12 @@ function FixtureCard({ fixture, league, season, highlight }) {
 
   return (
     <div style={styles.card}>
+      {showLeague && league && (
+        <div style={styles.cardLeague}>
+          <span style={{ fontSize: 13 }}>{league.flag}</span>
+          <span style={styles.cardLeagueName}>{league.name}</span>
+        </div>
+      )}
       <div
         role="button"
         tabIndex={0}
@@ -753,6 +791,8 @@ const styles = {
   groupTitle: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "var(--text)" },
   groupCount: { fontSize: 12, color: "var(--text3)", background: "var(--bg3)", borderRadius: 10, padding: "1px 8px" },
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" },
+  cardLeague: { display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg3)" },
+  cardLeagueName: { fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   cardHead: { display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", width: "100%", textAlign: "left" },
   kickoff: { fontSize: 13, color: "var(--text3)", width: 44, flexShrink: 0 },
   teams: { flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 },
