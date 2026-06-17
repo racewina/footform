@@ -790,7 +790,7 @@ const styles = {
   groupHeader: { display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 4px" },
   groupTitle: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "var(--text)" },
   groupCount: { fontSize: 12, color: "var(--text3)", background: "var(--bg3)", borderRadius: 10, padding: "1px 8px" },
-  card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" },
+  card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", flexShrink: 0 },
   cardLeague: { display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg3)" },
   cardLeagueName: { fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   cardHead: { display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", width: "100%", textAlign: "left" },
