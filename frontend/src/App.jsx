@@ -7,6 +7,7 @@ import SafeBetsPage from "./pages/SafeBetsPage";
 import SafeBetsResultsPage from "./pages/SafeBetsResultsPage";
 import VipBetPage from "./pages/VipBetPage";
 import ValueBetsPage from "./pages/ValueBetsPage";
+import RoiPage from "./pages/RoiPage";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -40,6 +41,8 @@ export default function App() {
           </header>
           {selectedLeague === "results"
             ? <ResultsPage />
+            : selectedLeague === "roi"
+              ? <RoiPage />
             : selectedLeague === "value"
               ? <ValueBetsPage />
               : selectedLeague === "vip"
@@ -65,6 +68,7 @@ const LEAGUE_NAMES = {
   "safe-results": { name: "Safe Bets Record", flag: "🧾" },
   "vip": { name: "VIP Bet", flag: "💎" },
   "value": { name: "Value Bets", flag: "📈" },
+  "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "40": { name: "Championship", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "140": { name: "La Liga", flag: "🇪🇸" },

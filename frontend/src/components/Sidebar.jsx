@@ -164,6 +164,20 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.itemName}>Value Bets</span>
           </button>
 
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "roi" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("roi");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>💹</span>
+            <span style={styles.itemName}>ROI Tracker</span>
+          </button>
+
         </nav>
       </aside>
     </>

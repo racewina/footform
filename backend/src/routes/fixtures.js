@@ -20,8 +20,9 @@ import {
   gradeMatch,
   summarizeAccuracy,
 } from "../services/backtest.js";
-import { buildAccumulators } from "../services/accumulator.js";
+import { buildAccumulators, buildLegPool } from "../services/accumulator.js";
 import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB } from "../services/vipbet.js";
+import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { buildEloModel } from "../services/elo.js";
 import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
@@ -461,6 +462,61 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
   return { perDay, grades };
 }
 
+// Like buildLeagueWindow, but buckets full graded MATCH objects (teams +
+// prediction + grade) per day instead of bare grades — enough for the ROI
+// tracker to rebuild that day's Safe Bets slips and single Top Picks. Still one
+// season fetch per league (cached), so a 30-day window stays cheap upstream.
+async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
+  const league = LEAGUES_BY_ID[leagueId];
+  if (!league) return null;
+
+  const season = await getCurrentSeason(leagueId);
+  if (!season) return null;
+
+  const events = await getLeaguePastEvents(leagueId, season.id);
+  const inWindow = events.filter((e) => {
+    if (!e.startTimestamp || e.status?.type !== "finished") return false;
+    if (e.homeScore?.current == null || e.awayScore?.current == null) return false;
+    if (!e.homeTeam?.id || !e.awayTeam?.id) return false;
+    return dateSet.has(formatDate(new Date(e.startTimestamp * 1000), tz));
+  });
+  if (!inWindow.length) return { league, perDay: {} };
+
+  const eventsMap = await getEventsForTeams(
+    inWindow.flatMap((e) => [e.homeTeam?.id, e.awayTeam?.id])
+  );
+  const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+
+  const perDay = {};
+  for (const e of inWindow) {
+    const homeId = e.homeTeam.id;
+    const awayId = e.awayTeam.id;
+    const homeForm = reconstructFormBefore(eventsMap[homeId] || [], homeId, e.startTimestamp);
+    const awayForm = reconstructFormBefore(eventsMap[awayId] || [], awayId, e.startTimestamp);
+    const eloRatings = elo
+      ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
+      : null;
+    const prediction = computePrediction(homeForm, awayForm, eloRatings);
+    if (!prediction.markets) continue;
+    const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
+
+    const match = {
+      id: e.id,
+      startTimestamp: e.startTimestamp,
+      homeScore: e.homeScore.current,
+      awayScore: e.awayScore.current,
+      homeTeam: { id: homeId, name: e.homeTeam.name, shortName: e.homeTeam.shortName, logo: `https://media.api-sports.io/football/teams/${homeId}.png` },
+      awayTeam: { id: awayId, name: e.awayTeam.name, shortName: e.awayTeam.shortName, logo: `https://media.api-sports.io/football/teams/${awayId}.png` },
+      prediction,
+      grade,
+    };
+    const day = formatDate(new Date(e.startTimestamp * 1000), tz);
+    (perDay[day] ||= []).push(match);
+  }
+
+  return { league, perDay };
+}
+
 // Multi-day aggregate accuracy: pool every league's graded finished matches
 // over a trailing window so Brier/calibration are read off hundreds of calls
 // instead of one noisy day. Also returns a per-day trend. The window ENDS
@@ -524,6 +580,81 @@ router.get("/results/summary", async (req, res) => {
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[results-summary] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Betting P&L over a trailing window: rebuild each past day's Safe Bets slips and
+// single Top Picks, grade them against real results, and settle at fair odds for
+// an honest (conservative) ROI. Window ENDS yesterday — today may be unfinished.
+router.get("/roi", async (req, res) => {
+  const tz = req.query.tz;
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 30);
+
+  const dates = [];
+  for (let i = 1; i <= days; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    dates.push(formatDate(d, tz));
+  }
+  dates.sort();
+
+  const dateSet = new Set(dates);
+  const cacheKey = `roi:${days}:${dates[0]}:${dates[dates.length - 1]}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // One season fetch per league (cached), bucketed by day. Sequential per
+    // league to respect the upstream rate gate.
+    const windows = [];
+    for (const l of LEAGUES) {
+      const w = await buildLeagueResultsWindow(l.id, dateSet, tz).catch((e) => {
+        console.error(`[roi] ${l.id}: ${e.message}`);
+        return null;
+      });
+      if (w) windows.push(w);
+    }
+
+    const allSlips = [];
+    const allSingles = [];
+    const perDay = {};
+
+    // Rebuild each day's slips/singles from every league that played that day.
+    for (const date of dates) {
+      const leagues = windows
+        .map((w) => ({ league: w.league, fixtures: w.perDay[date] || [] }))
+        .filter((g) => g.fixtures.length);
+
+      if (!leagues.length) { perDay[date] = { profit: 0, bets: 0 }; continue; }
+
+      const slips = buildAccumulators(leagues);
+      const singles = buildLegPool(leagues);
+      allSlips.push(...slips);
+      allSingles.push(...singles);
+      perDay[date] = dayProfit(slips);
+    }
+
+    const safeBets = settleSlips(allSlips);
+    const topPicks = settleSingles(allSingles);
+
+    // Cumulative Safe Bets profit per day, for the trend line.
+    let cum = 0;
+    const trend = dates.map((date) => {
+      const d = perDay[date] || { profit: 0, bets: 0 };
+      cum = Math.round((cum + d.profit) * 100) / 100;
+      return { date, profit: d.profit, cumulative: cum, bets: d.bets };
+    });
+
+    const result = {
+      window: { days, from: dates[0], to: dates[dates.length - 1] },
+      products: { safeBets, topPicks },
+      trend,
+    };
+    cacheSet(cacheKey, result, TTL.TEAM_FORM);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[roi] ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
