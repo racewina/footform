@@ -31,11 +31,13 @@ async function fetchFixtures(leagueId, date) {
 }
 
 // Match-level goal markets shown as pills on every card.
-const MATCH_MARKETS = [
-  { key: "win", label: "Win" },
-  { key: "over25", label: "O2.5" },
-  { key: "btts", label: "BTTS" },
-];
+// Short, fixed-width label for a team in the compact 1X2 result row. Prefer an
+// existing short code; otherwise abbreviate the name to its first three letters.
+function teamCode(t) {
+  const s = (t?.shortName || t?.name || "").trim();
+  if (!s) return "—";
+  return (s.length <= 4 ? s : s.slice(0, 3)).toUpperCase();
+}
 
 // API-Football id for the World Cup — the only competition we show player props
 // for (national-team props lean on club-season form; see backend players.js).
@@ -326,35 +328,43 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
       {p?.markets && (
         <div style={styles.marketWrap}>
           <div style={styles.marketRow}>
-            {MATCH_MARKETS.map((m) => {
-              const val = p.markets[m.key] ?? 0;
-              const color = pctColor(val);
-              const active = highlight === m.key;
-              // For past (graded) matches, show whether the call landed. The
-              // pill key "win" is graded under "winner".
-              const gradeKey = m.key === "win" ? "winner" : m.key;
-              const hit = fixture.grade?.grades?.[gradeKey]?.hit;
-              return (
-                <div
-                  key={m.key}
-                  style={{
-                    ...styles.marketPill,
-                    background: tint(color),
-                    ...(active ? { outline: `1px solid ${color}` } : {}),
-                  }}
-                >
-                  <span style={styles.marketLabel}>
-                    {m.label}
-                    {hit != null && (
-                      <span style={{ color: hit ? "var(--win)" : "var(--loss)", marginLeft: 3 }}>
-                        {hit ? "✓" : "✗"}
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ ...styles.marketVal, color }}>{val}%</span>
-                </div>
-              );
-            })}
+            {(() => {
+              // Favoured side drives where the result ✓/✗ sits (the model never
+              // picks the draw as its call, so only home/away can carry it).
+              const favSide = (p.home ?? 0) >= (p.away ?? 0) ? "home" : "away";
+              const winnerHit = fixture.grade?.grades?.winner?.hit;
+              const cells = [
+                { key: "home", label: teamCode(fixture.homeTeam), val: p.home, hit: favSide === "home" ? winnerHit : null, active: highlight === "win" && favSide === "home" },
+                { key: "draw", label: "Draw", val: p.draw, hit: null, active: false },
+                { key: "away", label: teamCode(fixture.awayTeam), val: p.away, hit: favSide === "away" ? winnerHit : null, active: highlight === "win" && favSide === "away" },
+                { key: "over25", label: "O2.5", val: p.markets.over25, hit: fixture.grade?.grades?.over25?.hit, active: highlight === "over25" },
+                { key: "btts", label: "BTTS", val: p.markets.btts, hit: fixture.grade?.grades?.btts?.hit, active: highlight === "btts" },
+              ];
+              return cells.map((c) => {
+                const val = c.val ?? 0;
+                const color = pctColor(val);
+                return (
+                  <div
+                    key={c.key}
+                    style={{
+                      ...styles.marketPill,
+                      background: tint(color),
+                      ...(c.active ? { outline: `1px solid ${color}` } : {}),
+                    }}
+                  >
+                    <span style={styles.marketLabel}>
+                      {c.label}
+                      {c.hit != null && (
+                        <span style={{ color: c.hit ? "var(--win)" : "var(--loss)", marginLeft: 2 }}>
+                          {c.hit ? "✓" : "✗"}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ ...styles.marketVal, color }}>{val}%</span>
+                  </div>
+                );
+              });
+            })()}
           </div>
           <div style={styles.teamGoals}>
             <span style={styles.teamGoalsTitle}>To score</span>
@@ -831,10 +841,10 @@ const styles = {
   modalSummaryText: { fontSize: 13, color: "var(--text2)", lineHeight: 1.5, marginTop: 5 },
   modalFooter: { fontSize: 11, color: "var(--text3)", padding: "12px 18px", lineHeight: 1.45 },
   marketWrap: { display: "flex", flexDirection: "column", gap: 8, padding: "0 16px 12px" },
-  marketRow: { display: "flex", gap: 6, flexWrap: "wrap" },
-  marketPill: { flex: "1 1 0", minWidth: 60, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 4px", borderRadius: 8 },
-  marketLabel: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 },
-  marketVal: { fontSize: 15, fontWeight: 700 },
+  marketRow: { display: "flex", gap: 5, flexWrap: "wrap" },
+  marketPill: { flex: "1 1 0", minWidth: 52, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "5px 3px", borderRadius: 7 },
+  marketLabel: { fontSize: 9, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" },
+  marketVal: { fontSize: 14, fontWeight: 700 },
   teamGoals: { display: "flex", flexDirection: "column", gap: 6, background: "var(--bg3)", borderRadius: 8, padding: "8px 10px" },
   teamGoalsTitle: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5 },
   teamGoalRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
