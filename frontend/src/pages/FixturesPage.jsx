@@ -39,6 +39,18 @@ function teamCode(t) {
   return (s.length <= 4 ? s : s.slice(0, 3)).toUpperCase();
 }
 
+// Single-letter position code for the cramped mobile player rows: Goalkeeper→G,
+// Defender→D, Midfielder→M, Attacker/Forward→F.
+function posCode(pos) {
+  if (!pos) return "";
+  const p = pos.toLowerCase();
+  if (p.startsWith("goal") || p === "gk" || p === "g") return "G";
+  if (p.startsWith("def") || p === "d") return "D";
+  if (p.startsWith("mid") || p === "m") return "M";
+  if (p.startsWith("att") || p.startsWith("for") || p === "f" || p === "a") return "F";
+  return pos[0].toUpperCase();
+}
+
 // API-Football id for the World Cup — the only competition we show player props
 // for (national-team props lean on club-season form; see backend players.js).
 const WORLD_CUP_ID = 1;
@@ -591,11 +603,12 @@ function PlayerPropsSection({ fixtureId, propsSeason, isWorldCup, highlight }) {
 function PlayerRow({ player, highlight }) {
   const props = player.props;
   return (
-    <div style={styles.playerRow}>
+    <div className="pp-row" style={styles.playerRow}>
       <span style={styles.playerName}>
         {player.number != null && <span className="pp-num" style={styles.playerNum}>{player.number}</span>}
         <span className="pp-nametext" style={styles.playerNameText}>{player.name || "Unknown"}</span>
         {player.pos && <span className="pp-pos" style={styles.playerPos}>{player.pos}</span>}
+        {player.pos && <span className="pp-pos-short" style={styles.playerPosShort}>{posCode(player.pos)}</span>}
       </span>
       {props
         ? PLAYER_MARKETS.map((m) => {
@@ -885,6 +898,7 @@ const styles = {
   playerNum: { fontSize: 10, color: "var(--text3)", width: 16, textAlign: "center", flexShrink: 0 },
   playerNameText: { fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
   playerPos: { fontSize: 9, color: "var(--text3)", border: "1px solid var(--border)", borderRadius: 4, padding: "0 4px", flexShrink: 0 },
+  playerPosShort: { display: "none", fontSize: 9, fontWeight: 700, color: "var(--text3)", border: "1px solid var(--border)", borderRadius: 4, padding: "0 3px", flexShrink: 0, lineHeight: "14px" },
   playerCell: { width: 44, textAlign: "center", fontSize: 12, fontWeight: 700, padding: "3px 0", borderRadius: 6, flexShrink: 0 },
   playerCellEmpty: { color: "var(--text3)", fontWeight: 400, background: "var(--bg3)" },
   cornerHead: { display: "flex", alignItems: "center", gap: 6, padding: "0 2px" },

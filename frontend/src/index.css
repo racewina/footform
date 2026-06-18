@@ -80,19 +80,24 @@ button {
    freed space so it's always legible. */
 @media (max-width: 600px) {
   .pp-cell {
-    width: 38px !important;
-    font-size: 11px !important;
+    width: 35px !important;
+    font-size: 10px !important;
   }
   .pp-legend-cell {
-    width: 38px !important;
+    width: 35px !important;
     font-size: 8px !important;
   }
+  .pp-row,
   .pp-legend {
     gap: 4px !important;
   }
   .pp-num,
   .pp-pos {
     display: none !important;
+  }
+  .pp-pos-short {
+    display: inline-flex !important;
+    align-items: center;
   }
   .pp-nametext {
     flex: 1 1 auto;
