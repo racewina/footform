@@ -164,7 +164,7 @@ export default function FixturesPage({ leagueId }) {
   return (
     <div style={styles.page}>
       <div style={styles.dateBar}>
-        <button style={{ ...styles.navBtn, ...(isToday ? styles.navBtnDisabled : {}) }} onClick={() => !isToday && shift(-1)} disabled={isToday}>
+        <button style={styles.navBtn} onClick={() => shift(-1)} aria-label="Previous day">
           ‹
         </button>
         <div style={styles.dateLabel}>
@@ -330,6 +330,10 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
               const val = p.markets[m.key] ?? 0;
               const color = pctColor(val);
               const active = highlight === m.key;
+              // For past (graded) matches, show whether the call landed. The
+              // pill key "win" is graded under "winner".
+              const gradeKey = m.key === "win" ? "winner" : m.key;
+              const hit = fixture.grade?.grades?.[gradeKey]?.hit;
               return (
                 <div
                   key={m.key}
@@ -339,7 +343,14 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
                     ...(active ? { outline: `1px solid ${color}` } : {}),
                   }}
                 >
-                  <span style={styles.marketLabel}>{m.label}</span>
+                  <span style={styles.marketLabel}>
+                    {m.label}
+                    {hit != null && (
+                      <span style={{ color: hit ? "var(--win)" : "var(--loss)", marginLeft: 3 }}>
+                        {hit ? "✓" : "✗"}
+                      </span>
+                    )}
+                  </span>
                   <span style={{ ...styles.marketVal, color }}>{val}%</span>
                 </div>
               );

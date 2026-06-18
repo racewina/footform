@@ -411,6 +411,32 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
   return { ...result, fromCache: false };
 }
 
+// One league's fixtures for ANY date in a single { league, season, fixtures }
+// shape. Upcoming/today come from the live matchday feed; PAST dates come from
+// the results engine (leak-free pre-kickoff predictions + grading) mapped into
+// the same fixture shape, so the matchday UI can browse backwards through
+// history and show how each call actually landed.
+async function buildLeagueDayAny(leagueId, targetDate, tz) {
+  const today = formatDate(new Date(), tz);
+  if (targetDate >= today) return buildLeagueDay(leagueId, targetDate, tz);
+
+  const r = await buildLeagueResults(leagueId, targetDate, tz);
+  if (!r) return null;
+  const fixtures = (r.matches || []).map((m) => ({
+    id: m.id,
+    homeTeam: m.homeTeam,
+    awayTeam: m.awayTeam,
+    startTimestamp: m.startTimestamp,
+    status: "finished",
+    homeScore: m.homeScore,
+    awayScore: m.awayScore,
+    round: m.round,
+    prediction: m.prediction,
+    grade: m.grade, // carries per-market hit/miss so the card can show outcomes
+  }));
+  return { league: r.league, date: targetDate, season: r.season, fixtures, fromCache: r.fromCache };
+}
+
 // Build a league's graded finished matches across a WINDOW of days at once.
 // Unlike calling buildLeagueResults per day, this fetches the league's season
 // events a single time (getLeaguePastEvents is cached) and buckets matches by
@@ -667,7 +693,7 @@ router.get("/fixtures/:leagueId", async (req, res) => {
   if (!LEAGUES_BY_ID[leagueId]) return res.status(404).json({ error: "League not found" });
 
   try {
-    const result = await buildLeagueDay(leagueId, targetDate, tz);
+    const result = await buildLeagueDayAny(leagueId, targetDate, tz);
     res.json(result);
   } catch (err) {
     console.error(`[fixtures] ${err.message}`);
@@ -743,7 +769,7 @@ router.get("/today", async (req, res) => {
   try {
     const groups = await Promise.all(
       LEAGUES.map((l) =>
-        buildLeagueDay(l.id, targetDate, tz).catch((e) => {
+        buildLeagueDayAny(l.id, targetDate, tz).catch((e) => {
           console.error(`[today] ${l.id}: ${e.message}`);
           return null;
         })
