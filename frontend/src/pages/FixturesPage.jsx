@@ -567,10 +567,10 @@ function PlayerPropsSection({ fixtureId, propsSeason, isWorldCup, highlight }) {
         Each player's odds use their {seasonLabel}{isWorldCup ? " club-season" : ""} per-90 rates —
         guidance, not certainty.
       </p>
-      <div style={styles.playerLegend}>
+      <div className="pp-legend" style={styles.playerLegend}>
         <span style={styles.playerLegendName} />
         {PLAYER_MARKETS.map((m) => (
-          <span key={m.key} style={styles.playerLegendCell}>{m.label}</span>
+          <span key={m.key} className="pp-legend-cell" style={styles.playerLegendCell}>{m.label}</span>
         ))}
       </div>
       {sides.map((side) => (
@@ -593,9 +593,9 @@ function PlayerRow({ player, highlight }) {
   return (
     <div style={styles.playerRow}>
       <span style={styles.playerName}>
-        {player.number != null && <span style={styles.playerNum}>{player.number}</span>}
-        <span style={styles.playerNameText}>{player.name || "Unknown"}</span>
-        {player.pos && <span style={styles.playerPos}>{player.pos}</span>}
+        {player.number != null && <span className="pp-num" style={styles.playerNum}>{player.number}</span>}
+        <span className="pp-nametext" style={styles.playerNameText}>{player.name || "Unknown"}</span>
+        {player.pos && <span className="pp-pos" style={styles.playerPos}>{player.pos}</span>}
       </span>
       {props
         ? PLAYER_MARKETS.map((m) => {
@@ -605,6 +605,7 @@ function PlayerRow({ player, highlight }) {
             return (
               <span
                 key={m.key}
+                className="pp-cell"
                 style={{
                   ...styles.playerCell,
                   background: tint(color),
@@ -617,7 +618,7 @@ function PlayerRow({ player, highlight }) {
             );
           })
         : PLAYER_MARKETS.map((m) => (
-            <span key={m.key} style={{ ...styles.playerCell, ...styles.playerCellEmpty }}>–</span>
+            <span key={m.key} className="pp-cell" style={{ ...styles.playerCell, ...styles.playerCellEmpty }}>–</span>
           ))}
     </div>
   );
@@ -882,7 +883,7 @@ const styles = {
   playerRow: { display: "flex", alignItems: "center", gap: 6, padding: "4px 2px", borderBottom: "1px solid var(--border)" },
   playerName: { flex: 1, display: "flex", alignItems: "center", gap: 6, minWidth: 0 },
   playerNum: { fontSize: 10, color: "var(--text3)", width: 16, textAlign: "center", flexShrink: 0 },
-  playerNameText: { fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  playerNameText: { fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 },
   playerPos: { fontSize: 9, color: "var(--text3)", border: "1px solid var(--border)", borderRadius: 4, padding: "0 4px", flexShrink: 0 },
   playerCell: { width: 44, textAlign: "center", fontSize: 12, fontWeight: 700, padding: "3px 0", borderRadius: 6, flexShrink: 0 },
   playerCellEmpty: { color: "var(--text3)", fontWeight: 400, background: "var(--bg3)" },

@@ -73,3 +73,29 @@ button {
     transform: translateX(0);
   }
 }
+
+/* Player-props table on phones: five fixed stat columns plus a long position
+   badge squeezed the player name to zero width in portrait. Shrink the stat
+   cells, drop the jersey number and position badge, and let the name take the
+   freed space so it's always legible. */
+@media (max-width: 600px) {
+  .pp-cell {
+    width: 38px !important;
+    font-size: 11px !important;
+  }
+  .pp-legend-cell {
+    width: 38px !important;
+    font-size: 8px !important;
+  }
+  .pp-legend {
+    gap: 4px !important;
+  }
+  .pp-num,
+  .pp-pos {
+    display: none !important;
+  }
+  .pp-nametext {
+    flex: 1 1 auto;
+    min-width: 0 !important;
+  }
+}
