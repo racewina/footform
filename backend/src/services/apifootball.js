@@ -164,13 +164,14 @@ export async function fetchLeagueSeason(leagueId) {
   return { seasons: [{ id: current.year, name: String(current.year) }] };
 }
 
-// Upcoming fixtures for a league: a generous date window (yesterday → +14d) so
-// today's already-started matches and the multi-day range view are both
-// covered. All fixtures come back in one response, so page>0 is empty.
+// Upcoming fixtures for a league: a generous date window (yesterday → +21d) so
+// today's already-started matches, the multi-day range view, and the date
+// picker's a-few-weeks-ahead jumps are all covered. All fixtures come back in
+// one response, so page>0 is empty.
 export async function fetchScheduledEvents(leagueId, season, page = 0) {
   if (page > 0) return { events: [] };
   const from = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const to = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  const to = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000);
   const json = await request(
     `/fixtures?league=${leagueId}&season=${season}&from=${ymdUTC(from)}&to=${ymdUTC(to)}`
   );

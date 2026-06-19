@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 function ymd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Parse a "YYYY-MM-DD" string (from the date picker) into a LOCAL-midnight Date,
+// avoiding the UTC shift that `new Date("YYYY-MM-DD")` would introduce.
+function parseYmd(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 function startOfToday() {
@@ -110,6 +117,7 @@ function tint(hex) {
 export default function FixturesPage({ leagueId }) {
   const [date, setDate] = useState(() => startOfToday());
   const [filterMarket, setFilterMarket] = useState("all");
+  const dateInputRef = useRef(null);
   const dateStr = ymd(date);
   const isToday = dateStr === ymd(startOfToday());
   const isTodayView = leagueId === "today";
@@ -181,10 +189,29 @@ export default function FixturesPage({ leagueId }) {
         <button style={styles.navBtn} onClick={() => shift(-1)} aria-label="Previous day">
           ‹
         </button>
-        <div style={styles.dateLabel}>
+        <button
+          style={styles.dateLabel}
+          onClick={() => {
+            const el = dateInputRef.current;
+            if (el?.showPicker) el.showPicker();
+            else el?.focus();
+          }}
+          aria-label="Pick a date"
+          title="Pick a date"
+        >
+          <span style={styles.dateLabelIcon} aria-hidden="true">📅</span>
           {prettyDate}
           {isToday && <span style={styles.todayTag}>Today</span>}
-        </div>
+          <input
+            ref={dateInputRef}
+            type="date"
+            value={dateStr}
+            onChange={(e) => e.target.value && setDate(parseYmd(e.target.value))}
+            style={styles.dateInput}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
+        </button>
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
       </div>
 
@@ -810,7 +837,9 @@ const styles = {
   dateBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "14px 24px", borderBottom: "1px solid var(--border)" },
   navBtn: { fontSize: 22, color: "var(--text2)", padding: "2px 14px", borderRadius: 8, background: "var(--bg2)" },
   navBtnDisabled: { opacity: 0.3, cursor: "not-allowed" },
-  dateLabel: { display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15, minWidth: 180, justifyContent: "center" },
+  dateLabel: { position: "relative", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15, minWidth: 180, justifyContent: "center", color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 14px", cursor: "pointer" },
+  dateLabelIcon: { fontSize: 13, opacity: 0.8 },
+  dateInput: { position: "absolute", left: "50%", bottom: 0, width: 1, height: 1, opacity: 0, border: "none", padding: 0, pointerEvents: "none" },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
   filterBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
   filterLabel: { fontSize: 12, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 2 },
