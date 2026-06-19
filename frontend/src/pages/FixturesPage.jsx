@@ -334,12 +334,20 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
           }
         }}
       >
-        <span style={styles.kickoff}>{kickoff}</span>
-        <div style={styles.teams}>
-          <TeamRow team={fixture.homeTeam} score={fixture.homeScore} />
-          <TeamRow team={fixture.awayTeam} score={fixture.awayScore} />
+        <div style={styles.aTeam}>
+          {fixture.homeTeam?.logo && <img src={fixture.homeTeam.logo} alt="" width={22} height={22} style={styles.aLogo} onError={(e) => (e.target.style.visibility = "hidden")} />}
+          <span style={styles.aTeamName}>{fixture.homeTeam?.name || "TBD"}</span>
         </div>
-        <span style={styles.chevron}>{open ? "▲" : "▼"}</span>
+        <div style={styles.aCenter}>
+          {fixture.homeScore != null && fixture.awayScore != null
+            ? <span style={styles.aScore}>{fixture.homeScore}–{fixture.awayScore}</span>
+            : <span style={styles.aTime}>{kickoff}</span>}
+          <span style={styles.chevron}>{open ? "▲" : "▼"}</span>
+        </div>
+        <div style={{ ...styles.aTeam, ...styles.aTeamRight }}>
+          <span style={styles.aTeamName}>{fixture.awayTeam?.name || "TBD"}</span>
+          {fixture.awayTeam?.logo && <img src={fixture.awayTeam.logo} alt="" width={22} height={22} style={styles.aLogo} onError={(e) => (e.target.style.visibility = "hidden")} />}
+        </div>
       </div>
 
       {showAnalysis && p?.markets && (
@@ -351,66 +359,34 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
         />
       )}
 
-      {p?.markets && (
-        <div style={styles.marketWrap}>
-          <div style={styles.marketRow}>
-            {(() => {
-              // Favoured side drives where the result ✓/✗ sits (the model never
-              // picks the draw as its call, so only home/away can carry it).
-              const favSide = (p.home ?? 0) >= (p.away ?? 0) ? "home" : "away";
-              const winnerHit = fixture.grade?.grades?.winner?.hit;
-              const cells = [
-                { key: "home", label: teamCode(fixture.homeTeam), val: p.home, hit: favSide === "home" ? winnerHit : null, active: highlight === "win" && favSide === "home" },
-                { key: "draw", label: "Draw", val: p.draw, hit: null, active: false },
-                { key: "away", label: teamCode(fixture.awayTeam), val: p.away, hit: favSide === "away" ? winnerHit : null, active: highlight === "win" && favSide === "away" },
-                { key: "over25", label: "O2.5", val: p.markets.over25, hit: fixture.grade?.grades?.over25?.hit, active: highlight === "over25" },
-                { key: "btts", label: "BTTS", val: p.markets.btts, hit: fixture.grade?.grades?.btts?.hit, active: highlight === "btts" },
-              ];
-              return cells.map((c) => {
-                const val = c.val ?? 0;
-                const color = pctColor(val);
-                return (
-                  <div
-                    key={c.key}
-                    style={{
-                      ...styles.marketPill,
-                      background: tint(color),
-                      ...(c.active ? { outline: `1px solid ${color}` } : {}),
-                    }}
-                  >
-                    <span style={styles.marketLabel}>
-                      {c.label}
-                      {c.hit != null && (
-                        <span style={{ color: c.hit ? "var(--win)" : "var(--loss)", marginLeft: 2 }}>
-                          {c.hit ? "✓" : "✗"}
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ ...styles.marketVal, color }}>{val}%</span>
-                  </div>
-                );
-              });
-            })()}
+      {p?.markets && (() => {
+        const favSide = (p.home ?? 0) >= (p.away ?? 0) ? "home" : "away";
+        const winnerHit = fixture.grade?.grades?.winner?.hit;
+        const tick = (h) => h == null ? null : <span style={{ color: h ? "var(--win)" : "var(--loss)", marginLeft: 3 }}>{h ? "✓" : "✗"}</span>;
+        return (
+          <div style={styles.aPredWrap}>
+            <div style={styles.aBar}>
+              <div style={{ flexGrow: p.home || 0, background: "var(--win)" }} title={`Home win ${p.home}%`} />
+              <div style={{ flexGrow: p.draw || 0, background: "var(--draw)" }} title={`Draw ${p.draw}%`} />
+              <div style={{ flexGrow: p.away || 0, background: "var(--loss)" }} title={`Away win ${p.away}%`} />
+            </div>
+            <div style={styles.aBarLabels}>
+              <span style={{ ...styles.aBarLabel, ...(highlight === "win" && favSide === "home" ? styles.aBarLabelHi : {}) }}>
+                {teamCode(fixture.homeTeam)} <b style={{ color: "var(--win)" }}>{p.home}%</b>{favSide === "home" && tick(winnerHit)}
+              </span>
+              <span style={{ ...styles.aBarLabel, justifyContent: "center" }}>Draw <b style={{ color: "var(--text2)" }}>{p.draw}%</b></span>
+              <span style={{ ...styles.aBarLabel, justifyContent: "flex-end", ...(highlight === "win" && favSide === "away" ? styles.aBarLabelHi : {}) }}>
+                {teamCode(fixture.awayTeam)} <b style={{ color: "var(--loss)" }}>{p.away}%</b>{favSide === "away" && tick(winnerHit)}
+              </span>
+            </div>
+            <div style={styles.aChips}>
+              <AChip label="Over 2.5" val={p.markets.over25} hit={fixture.grade?.grades?.over25?.hit} active={highlight === "over25"} />
+              <AChip label="Both score" val={p.markets.btts} hit={fixture.grade?.grades?.btts?.hit} active={highlight === "btts"} />
+              <AChip label="Exp. goals" raw={p.markets.expectedGoals} />
+            </div>
           </div>
-          <div style={styles.teamGoals}>
-            <TeamGoals
-              name={fixture.homeTeam?.shortName || fixture.homeTeam?.name || "Home"}
-              onePlus={p.markets.home1Plus}
-              twoPlus={p.markets.home2Plus}
-              highlightOne={highlight === "onePlus"}
-              highlightTwo={highlight === "twoPlus"}
-            />
-            <TeamGoals
-              name={fixture.awayTeam?.shortName || fixture.awayTeam?.name || "Away"}
-              onePlus={p.markets.away1Plus}
-              twoPlus={p.markets.away2Plus}
-              highlightOne={highlight === "onePlus"}
-              highlightTwo={highlight === "twoPlus"}
-              last
-            />
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {(canShowPlayers || canShowCorners || p?.markets) && (
         <div style={styles.actionRow}>
@@ -444,6 +420,28 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
 
       {canShowCorners && showCorners && (
         <CornersSection fixture={fixture} />
+      )}
+
+      {open && p?.markets && (
+        <div style={styles.aExpandGoals}>
+          <div style={styles.teamGoals}>
+            <TeamGoals
+              name={fixture.homeTeam?.shortName || fixture.homeTeam?.name || "Home"}
+              onePlus={p.markets.home1Plus}
+              twoPlus={p.markets.home2Plus}
+              highlightOne={highlight === "onePlus"}
+              highlightTwo={highlight === "twoPlus"}
+            />
+            <TeamGoals
+              name={fixture.awayTeam?.shortName || fixture.awayTeam?.name || "Away"}
+              onePlus={p.markets.away1Plus}
+              twoPlus={p.markets.away2Plus}
+              highlightOne={highlight === "onePlus"}
+              highlightTwo={highlight === "twoPlus"}
+              last
+            />
+          </div>
+        </div>
       )}
 
       {open && p && <PredictionDetail prediction={p} fixture={fixture} />}
@@ -724,16 +722,6 @@ function AnalysisModal({ fixture, league, prediction: p, onClose }) {
   );
 }
 
-function TeamRow({ team, score }) {
-  return (
-    <div style={styles.teamRow}>
-      {team?.logo && <img src={team.logo} alt="" width={18} height={18} style={styles.logo} onError={(e) => (e.target.style.visibility = "hidden")} />}
-      <span style={styles.teamName}>{team?.name || "TBD"}</span>
-      {score != null && <span style={styles.score}>{score}</span>}
-    </div>
-  );
-}
-
 function TeamGoals({ name, onePlus = 0, twoPlus = 0, highlightOne, highlightTwo, last }) {
   return (
     <div style={{ ...styles.teamGoalRow, ...(last ? {} : styles.teamGoalRowDivider) }}>
@@ -742,6 +730,24 @@ function TeamGoals({ name, onePlus = 0, twoPlus = 0, highlightOne, highlightTwo,
         <GoalStat label="1+" val={onePlus} active={highlightOne} />
         <GoalStat label="2+" val={twoPlus} active={highlightTwo} />
       </div>
+    </div>
+  );
+}
+
+// One calm stat chip in the Direction-A card: a labelled value. `val` is a
+// percentage (coloured by strength); `raw` is a plain number (e.g. expected
+// goals), shown neutral. `hit` adds a ✓/✗ on graded past matches.
+function AChip({ label, val, raw, hit, active }) {
+  const isPct = raw == null;
+  const num = isPct ? (val ?? 0) : raw;
+  const color = isPct ? pctColor(num) : "var(--text)";
+  return (
+    <div style={{ ...styles.aChip, ...(active ? { outline: `1px solid ${color}` } : {}) }}>
+      <span style={styles.aChipLabel}>
+        {label}
+        {hit != null && <span style={{ color: hit ? "var(--win)" : "var(--loss)", marginLeft: 3 }}>{hit ? "✓" : "✗"}</span>}
+      </span>
+      <span style={{ ...styles.aChipVal, color }}>{isPct ? `${num}%` : num}</span>
     </div>
   );
 }
@@ -844,14 +850,25 @@ const styles = {
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", flexShrink: 0 },
   cardLeague: { display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg3)" },
   cardLeagueName: { fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  cardHead: { display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", width: "100%", textAlign: "left" },
-  kickoff: { fontSize: 13, color: "var(--text3)", width: 44, flexShrink: 0 },
-  teams: { flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 },
-  teamRow: { display: "flex", alignItems: "center", gap: 8 },
-  logo: { flexShrink: 0, objectFit: "contain" },
-  teamName: { fontSize: 14, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 },
-  score: { fontSize: 14, fontWeight: 700, color: "var(--text)" },
-  chevron: { fontSize: 10, color: "var(--text3)", flexShrink: 0 },
+  cardHead: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", width: "100%", textAlign: "left" },
+  aTeam: { flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 0 },
+  aTeamRight: { justifyContent: "flex-end", textAlign: "right" },
+  aTeamName: { fontSize: 15, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  aLogo: { flexShrink: 0, objectFit: "contain" },
+  aCenter: { display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0, minWidth: 44 },
+  aTime: { fontSize: 13, color: "var(--text3)", whiteSpace: "nowrap" },
+  aScore: { fontSize: 17, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-display)" },
+  chevron: { fontSize: 9, color: "var(--text3)", flexShrink: 0 },
+  aPredWrap: { padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 8 },
+  aBar: { display: "flex", height: 10, borderRadius: 5, overflow: "hidden", background: "var(--bg3)" },
+  aBarLabels: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: "var(--text2)" },
+  aBarLabel: { flex: 1, display: "flex", alignItems: "center", gap: 4, minWidth: 0, whiteSpace: "nowrap" },
+  aBarLabelHi: { color: "var(--text)" },
+  aChips: { display: "flex", gap: 8, marginTop: 2 },
+  aChip: { flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "var(--bg3)", borderRadius: 8, padding: "8px 4px" },
+  aChipLabel: { fontSize: 11, color: "var(--text3)", whiteSpace: "nowrap" },
+  aChipVal: { fontSize: 16, fontWeight: 700 },
+  aExpandGoals: { padding: "12px 16px 0" },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
   modal: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, width: "100%", maxWidth: 440, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" },
   modalHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "16px 18px", borderBottom: "1px solid var(--border)" },
