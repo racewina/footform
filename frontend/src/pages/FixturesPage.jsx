@@ -339,19 +339,6 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
           <TeamRow team={fixture.homeTeam} score={fixture.homeScore} />
           <TeamRow team={fixture.awayTeam} score={fixture.awayScore} />
         </div>
-        {p?.markets && (
-          <button
-            style={styles.brainBtn}
-            title="AI match analysis"
-            aria-label="AI match analysis"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowAnalysis(true);
-            }}
-          >
-            🧠
-          </button>
-        )}
         <span style={styles.chevron}>{open ? "▲" : "▼"}</span>
       </div>
 
@@ -406,7 +393,6 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
             })()}
           </div>
           <div style={styles.teamGoals}>
-            <span style={styles.teamGoalsTitle}>To score</span>
             <TeamGoals
               name={fixture.homeTeam?.shortName || fixture.homeTeam?.name || "Home"}
               onePlus={p.markets.home1Plus}
@@ -420,39 +406,40 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
               twoPlus={p.markets.away2Plus}
               highlightOne={highlight === "onePlus"}
               highlightTwo={highlight === "twoPlus"}
+              last
             />
           </div>
         </div>
       )}
 
-      {canShowPlayers && (
-        <div style={styles.playerToggleWrap}>
-          <button
-            style={{ ...styles.playerToggle, ...(showPlayers ? styles.playerToggleActive : {}) }}
-            onClick={() => setShowPlayers((s) => !s)}
-          >
-            <span aria-hidden="true">👤</span>
-            Player props
-            <span style={styles.playerToggleChevron}>{showPlayers ? "▲" : "▼"}</span>
-          </button>
+      {(canShowPlayers || canShowCorners || p?.markets) && (
+        <div style={styles.actionRow}>
+          {canShowPlayers && (
+            <button
+              style={{ ...styles.actionBtn, ...(showPlayers ? styles.actionBtnActive : {}) }}
+              onClick={() => setShowPlayers((s) => !s)}
+            >
+              <span aria-hidden="true">👤</span> Players
+            </button>
+          )}
+          {canShowCorners && (
+            <button
+              style={{ ...styles.actionBtn, ...(showCorners ? styles.actionBtnActive : {}) }}
+              onClick={() => setShowCorners((s) => !s)}
+            >
+              <span aria-hidden="true">⛳</span> Corners
+            </button>
+          )}
+          {p?.markets && (
+            <button style={styles.actionBtn} onClick={() => setShowAnalysis(true)} aria-label="AI match analysis">
+              <span aria-hidden="true">🧠</span> Analysis
+            </button>
+          )}
         </div>
       )}
 
       {canShowPlayers && showPlayers && (
         <PlayerPropsSection fixtureId={fixture.id} propsSeason={propsSeason} isWorldCup={isWorldCup} highlight={highlight} />
-      )}
-
-      {canShowCorners && (
-        <div style={styles.playerToggleWrap}>
-          <button
-            style={{ ...styles.playerToggle, ...(showCorners ? styles.playerToggleActive : {}) }}
-            onClick={() => setShowCorners((s) => !s)}
-          >
-            <span aria-hidden="true">⛳</span>
-            Corners
-            <span style={styles.playerToggleChevron}>{showCorners ? "▲" : "▼"}</span>
-          </button>
-        </div>
       )}
 
       {canShowCorners && showCorners && (
@@ -747,10 +734,10 @@ function TeamRow({ team, score }) {
   );
 }
 
-function TeamGoals({ name, onePlus = 0, twoPlus = 0, highlightOne, highlightTwo }) {
+function TeamGoals({ name, onePlus = 0, twoPlus = 0, highlightOne, highlightTwo, last }) {
   return (
-    <div style={styles.teamGoalRow}>
-      <span style={styles.teamGoalName}>{name}</span>
+    <div style={{ ...styles.teamGoalRow, ...(last ? {} : styles.teamGoalRowDivider) }}>
+      <span style={styles.teamGoalName}>{name} <span style={styles.teamGoalSuffix}>to score</span></span>
       <div style={styles.teamGoalPills}>
         <GoalStat label="1+" val={onePlus} active={highlightOne} />
         <GoalStat label="2+" val={twoPlus} active={highlightTwo} />
@@ -865,7 +852,6 @@ const styles = {
   teamName: { fontSize: 14, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 },
   score: { fontSize: 14, fontWeight: 700, color: "var(--text)" },
   chevron: { fontSize: 10, color: "var(--text3)", flexShrink: 0 },
-  brainBtn: { fontSize: 18, flexShrink: 0, padding: "2px 6px", borderRadius: 8, background: "var(--bg3)", lineHeight: 1 },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
   modal: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, width: "100%", maxWidth: 440, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" },
   modalHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "16px 18px", borderBottom: "1px solid var(--border)" },
@@ -888,10 +874,11 @@ const styles = {
   marketPill: { flex: "1 1 0", minWidth: 52, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "5px 3px", borderRadius: 7 },
   marketLabel: { fontSize: 9, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" },
   marketVal: { fontSize: 14, fontWeight: 700 },
-  teamGoals: { display: "flex", flexDirection: "column", gap: 6, background: "var(--bg3)", borderRadius: 8, padding: "8px 10px" },
-  teamGoalsTitle: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5 },
-  teamGoalRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  teamGoalName: { fontSize: 13, color: "var(--text2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 },
+  teamGoals: { display: "flex", flexDirection: "column", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" },
+  teamGoalRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 11px" },
+  teamGoalRowDivider: { borderBottom: "1px solid var(--border)" },
+  teamGoalName: { fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 },
+  teamGoalSuffix: { color: "var(--text3)", fontSize: 12 },
   teamGoalPills: { display: "flex", gap: 6, flexShrink: 0 },
   goalStat: { display: "flex", alignItems: "center", gap: 5, padding: "3px 8px", borderRadius: 6, minWidth: 64, justifyContent: "center" },
   goalStatLabel: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase" },
@@ -908,10 +895,9 @@ const styles = {
   badges: { display: "flex", gap: 3, flexWrap: "wrap" },
   badge: { width: 18, height: 18, borderRadius: 4, fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   confidence: { fontSize: 11, textTransform: "capitalize", border: "1px solid", borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" },
-  playerToggleWrap: { padding: "0 16px 12px" },
-  playerToggle: { display: "flex", alignItems: "center", gap: 6, width: "100%", justifyContent: "center", fontSize: 12, color: "var(--text2)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: "7px 10px" },
-  playerToggleActive: { color: "var(--accent)", borderColor: "var(--accent)" },
-  playerToggleChevron: { fontSize: 9, color: "var(--text3)" },
+  actionRow: { display: "flex", gap: 6, padding: "0 16px 12px" },
+  actionBtn: { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 12, color: "var(--text2)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 6px" },
+  actionBtnActive: { color: "var(--accent)", borderColor: "var(--accent)", background: "var(--bg2)" },
   playerWrap: { borderTop: "1px solid var(--border)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 },
   playerNote: { fontSize: 11, color: "var(--text3)", lineHeight: 1.45, margin: 0 },
   playerEmpty: { fontSize: 12, color: "var(--text3)", textAlign: "center", padding: "8px 0", margin: 0 },
