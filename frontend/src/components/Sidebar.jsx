@@ -14,7 +14,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
     staleTime: 24 * 60 * 60 * 1000,
   });
 
-  const [leaguesOpen, setLeaguesOpen] = useState(true);
+  const [leaguesOpen, setLeaguesOpen] = useState(false);
 
   const leagues = data?.leagues || [];
   const byCountry = leagues.reduce((acc, l) => {
