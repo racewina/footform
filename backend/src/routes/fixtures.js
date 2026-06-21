@@ -309,10 +309,14 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
     round: e.roundInfo?.round || null,
   }));
 
-  // Attach a form-based prediction (incl. goal markets) to every fixture so
-  // the UI can show market badges and filter by prediction type without an
-  // expand round-trip.
-  const formMap = await getFormsForTeams(
+  // Attach a form-based prediction (incl. goal markets) to every fixture. We
+  // reconstruct each team's form AS OF KICKOFF — not "current" form — so the
+  // prediction is FROZEN: once a match kicks off, its numbers can never change,
+  // and in particular a match that finishes today can't pull its own result
+  // into the teams' recent form. This is the exact leak-free computation the
+  // results/record views use, so a fixture reads identically before and after
+  // it's played.
+  const eventsMap = await getEventsForTeams(
     fixtures.flatMap((f) => [f.homeTeam.id, f.awayTeam.id])
   );
   // Season Elo ratings (second model) for the blend. Failure falls back to the
@@ -323,14 +327,12 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
       fx.prediction = null;
       continue;
     }
+    const homeForm = reconstructFormBefore(eventsMap[fx.homeTeam.id] || [], fx.homeTeam.id, fx.startTimestamp);
+    const awayForm = reconstructFormBefore(eventsMap[fx.awayTeam.id] || [], fx.awayTeam.id, fx.startTimestamp);
     const eloRatings = elo
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
-    fx.prediction = computePrediction(
-      formMap[fx.homeTeam.id] || [],
-      formMap[fx.awayTeam.id] || [],
-      eloRatings
-    );
+    fx.prediction = computePrediction(homeForm, awayForm, eloRatings);
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };
