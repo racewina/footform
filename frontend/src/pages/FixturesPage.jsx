@@ -117,6 +117,11 @@ function tint(hex) {
 export default function FixturesPage({ leagueId }) {
   const [date, setDate] = useState(() => startOfToday());
   const [filterMarket, setFilterMarket] = useState("all");
+  // Multi-select: an array of league ids. Empty = all leagues.
+  const [leagueFilter, setLeagueFilter] = useState([]);
+  const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
+  const toggleLeague = (id) =>
+    setLeagueFilter((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const dateInputRef = useRef(null);
   const dateStr = ymd(date);
   const isToday = dateStr === ymd(startOfToday());
@@ -128,13 +133,15 @@ export default function FixturesPage({ leagueId }) {
     keepPreviousData: true,
   });
 
-  const shift = (days) => {
-    setDate((prev) => {
-      const next = new Date(prev);
+  // Moving to a new day repopulates which leagues are playing, so drop the
+  // league filter to avoid a stale selection that hides everything.
+  const goToDate = (next) => { setLeagueFilter([]); setDate(next); };
+  const shift = (days) =>
+    goToDate((() => {
+      const next = new Date(date);
       next.setDate(next.getDate() + days);
       return next;
-    });
-  };
+    })());
 
   // Normalize both the single-league and cross-league ("today") responses into
   // a common list of { league, fixtures } groups, then apply the prediction
@@ -159,16 +166,34 @@ export default function FixturesPage({ leagueId }) {
 
   const totalFixtures = groups.reduce((n, g) => n + g.fixtures.length, 0);
 
+  // Leagues that actually have matches today — drives the league filter dropdown
+  // (a short, relevant list rather than all 26 competitions).
+  const dayLeagues = isTodayView
+    ? groups.map((g) => ({ id: String(g.league.id), name: g.league.name, flag: g.league.flag }))
+    : [];
+
+  // Summary label for the multi-select button.
+  const leagueSummary =
+    leagueFilter.length === 0
+      ? "All leagues"
+      : leagueFilter.length === 1
+        ? dayLeagues.find((l) => l.id === leagueFilter[0])?.name || "1 league"
+        : `${leagueFilter.length} leagues`;
+
   // The cross-league "today" view reads best as one time-ordered list rather
   // than league-by-league. Flatten every group into a single stream, carrying
   // each fixture's league/season so the card can still show its competition.
   // Default sort is by kickoff; with a prediction filter active we keep the
-  // strongest-first ranking that filter implies.
+  // strongest-first ranking that filter implies. The optional league filter
+  // narrows the stream to one competition.
   const flatToday = isTodayView
     ? (() => {
-        const flat = groups.flatMap((g) =>
+        let flat = groups.flatMap((g) =>
           g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season }))
         );
+        if (leagueFilter.length) {
+          flat = flat.filter((x) => leagueFilter.includes(String(x.league.id)));
+        }
         if (filterMarket === "all") {
           flat.sort((a, b) => (a.fx.startTimestamp ?? Infinity) - (b.fx.startTimestamp ?? Infinity));
         } else {
@@ -178,6 +203,9 @@ export default function FixturesPage({ leagueId }) {
         return flat;
       })()
     : null;
+
+  // Visible count after all filters (drives the empty state for the today view).
+  const visibleCount = isTodayView ? flatToday.length : totalFixtures;
 
   const prettyDate = date.toLocaleDateString(undefined, {
     weekday: "short", month: "short", day: "numeric",
@@ -206,7 +234,7 @@ export default function FixturesPage({ leagueId }) {
             ref={dateInputRef}
             type="date"
             value={dateStr}
-            onChange={(e) => e.target.value && setDate(parseYmd(e.target.value))}
+            onChange={(e) => e.target.value && goToDate(parseYmd(e.target.value))}
             style={styles.dateInput}
             tabIndex={-1}
             aria-hidden="true"
@@ -235,6 +263,36 @@ export default function FixturesPage({ leagueId }) {
         {filterMarket !== "all" && (
           <span style={styles.filterHint}>≥ {FILTER_THRESHOLD}%</span>
         )}
+        {isTodayView && dayLeagues.length > 1 && (
+          <div style={styles.leagueWrap}>
+            <button
+              style={styles.leagueSelect}
+              onClick={() => setLeagueMenuOpen((o) => !o)}
+              aria-haspopup="listbox"
+              aria-expanded={leagueMenuOpen}
+            >
+              <span style={styles.leagueSelectText}>{leagueSummary}</span>
+              <span style={styles.leagueCaret}>▾</span>
+            </button>
+            {leagueMenuOpen && (
+              <>
+                <div style={styles.menuOverlay} onClick={() => setLeagueMenuOpen(false)} />
+                <div style={styles.leagueMenu} role="listbox">
+                  <label style={styles.menuItem}>
+                    <input type="checkbox" checked={leagueFilter.length === 0} onChange={() => setLeagueFilter([])} />
+                    <span>All leagues</span>
+                  </label>
+                  {dayLeagues.map((l) => (
+                    <label key={l.id} style={styles.menuItem}>
+                      <input type="checkbox" checked={leagueFilter.includes(l.id)} onChange={() => toggleLeague(l.id)} />
+                      <span>{l.flag} {l.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div style={styles.note}>
@@ -249,13 +307,15 @@ export default function FixturesPage({ leagueId }) {
       <div style={styles.list}>
         {isLoading && <Spinner />}
         {isError && <p style={styles.error}>{error.message}</p>}
-        {!isLoading && !isError && totalFixtures === 0 && (
+        {!isLoading && !isError && visibleCount === 0 && (
           <p style={styles.empty}>
-            {filterMarket === "all"
+            {totalFixtures === 0
               ? isTodayView
                 ? "No matches scheduled across any league on this date."
                 : "No fixtures on this date."
-              : "No matches meet this prediction filter."}
+              : leagueFilter.length
+                ? "No matches for the selected leagues and filter on this date."
+                : "No matches meet this prediction filter."}
           </p>
         )}
         {!isLoading && !isError && isTodayView &&
@@ -839,6 +899,13 @@ const styles = {
   filterChip: { fontSize: 13, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px" },
   filterChipActive: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)", fontWeight: 600 },
   filterHint: { fontSize: 12, color: "var(--text3)" },
+  leagueWrap: { position: "relative", marginLeft: "auto" },
+  leagueSelect: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 10px", maxWidth: 220 },
+  leagueSelectText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  leagueCaret: { fontSize: 9, color: "var(--text3)", flexShrink: 0 },
+  menuOverlay: { position: "fixed", inset: 0, zIndex: 18 },
+  leagueMenu: { position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 19, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, minWidth: 210, maxHeight: 320, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.45)" },
+  menuItem: { display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", fontSize: 13, color: "var(--text)", borderRadius: 6, whiteSpace: "nowrap", cursor: "pointer" },
   note: { display: "flex", alignItems: "flex-start", gap: 6, padding: "8px 24px", fontSize: 12, color: "var(--text3)", borderBottom: "1px solid var(--border)", lineHeight: 1.45 },
   list: { flex: 1, overflowY: "auto", padding: "16px 24px", display: "flex", flexDirection: "column", gap: 16, maxWidth: 780, width: "100%", margin: "0 auto" },
   empty: { color: "var(--text3)", textAlign: "center", padding: 40 },
