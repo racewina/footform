@@ -28,6 +28,27 @@ const limiter = rateLimit({
 });
 app.use("/api", limiter);
 
+// Edge-cache read-only API responses on Vercel's CDN. The heavy cross-league
+// aggregations (e.g. /today across 26 leagues) take ~20s to build on a cold
+// cache; caching the RESPONSE at the edge means that cost is paid once and
+// shared by everyone, and stale-while-revalidate serves the cached copy
+// instantly while a fresh one rebuilds in the background — so users stop hitting
+// the cold path. Only successful (2xx) GETs are cached; errors are never stored.
+app.use("/api", (req, res, next) => {
+  if (req.method !== "GET" || req.path === "/health") return next();
+  const sendJson = res.json.bind(res);
+  res.json = (body) => {
+    res.set(
+      "Cache-Control",
+      res.statusCode >= 200 && res.statusCode < 300
+        ? "public, s-maxage=600, stale-while-revalidate=3600"
+        : "no-store"
+    );
+    return sendJson(body);
+  };
+  next();
+});
+
 app.use("/api", fixturesRouter);
 
 app.get("/api/health", (req, res) => {
