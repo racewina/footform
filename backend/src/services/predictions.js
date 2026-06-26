@@ -51,6 +51,21 @@ function shrunkRate(avgPerGame, games, baseline) {
   return (games * avgPerGame + SHRINK_K * baseline) / (games + SHRINK_K);
 }
 
+// A league's own average home/away goals, from its finished matches — the
+// per-league calibration. Falls back to the global default until the league has
+// enough games (early season), and clamps to a sane band so a freak run of
+// blowouts can't distort the prior. Pass the result to computePrediction.
+export function leagueBaselines(events) {
+  const finished = (events || []).filter(
+    (e) => e.status?.type === "finished" && e.homeScore?.current != null && e.awayScore?.current != null
+  );
+  if (finished.length < 30) return { home: HOME_BASE, away: AWAY_BASE };
+  const n = finished.length;
+  const h = finished.reduce((s, e) => s + e.homeScore.current, 0) / n;
+  const a = finished.reduce((s, e) => s + e.awayScore.current, 0) / n;
+  return { home: clamp(h, 0.9, 2.4), away: clamp(a, 0.6, 2.1) };
+}
+
 // Dixon–Coles correction for the four low-score cells independent Poisson
 // misprices. With ρ<0 it lifts 0-0/1-1 and trims 1-0/0-1, matching real games.
 function tau(i, j, lh, la, rho) {
@@ -160,7 +175,14 @@ function calcTeamScore(form, venueFilter) {
   return { score, form: form.slice(0, 6), goalsFor, goalsAgainst, gamesPlayed: relevant.length };
 }
 
-export function computePrediction(homeTeamForm, awayTeamForm, elo = null) {
+export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baselines = null) {
+  // Per-league goal baselines when supplied (a high-scoring league expects more
+  // goals than a defensive one); otherwise the global default. These are the
+  // priors that shrinkage pulls thin samples toward and the pivots that set the
+  // league's average scoreline.
+  const homeBase = baselines?.home ?? HOME_BASE;
+  const awayBase = baselines?.away ?? AWAY_BASE;
+
   const homeStats = calcTeamScore(homeTeamForm, { isHome: true });
   const awayStats = calcTeamScore(awayTeamForm, { isHome: false });
 
@@ -168,24 +190,24 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null) {
   // rate is shrunk toward its baseline so thin samples don't run wild:
   //   • a side's goals-for shrinks toward how much that side normally scores,
   //   • its goals-against toward how much that side normally concedes,
-  // where home-scoring ≈ away-conceding (HOME_BASE) and vice versa (AWAY_BASE).
-  const hFor = shrunkRate(homeStats.goalsFor, homeStats.gamesPlayed, HOME_BASE);
-  const hAga = shrunkRate(homeStats.goalsAgainst, homeStats.gamesPlayed, AWAY_BASE);
-  const aFor = shrunkRate(awayStats.goalsFor, awayStats.gamesPlayed, AWAY_BASE);
-  const aAga = shrunkRate(awayStats.goalsAgainst, awayStats.gamesPlayed, HOME_BASE);
+  // where home-scoring ≈ away-conceding (homeBase) and vice versa (awayBase).
+  const hFor = shrunkRate(homeStats.goalsFor, homeStats.gamesPlayed, homeBase);
+  const hAga = shrunkRate(homeStats.goalsAgainst, homeStats.gamesPlayed, awayBase);
+  const aFor = shrunkRate(awayStats.goalsFor, awayStats.gamesPlayed, awayBase);
+  const aAga = shrunkRate(awayStats.goalsAgainst, awayStats.gamesPlayed, homeBase);
 
   // home attack × away defence, pivoted on the home-side baseline (and likewise
   // for the away side). Dividing by the baseline keeps an average match at the
-  // realistic ~1.45 / ~1.15 split, with home advantage already baked in.
-  let lambdaHome = (hFor * aAga) / HOME_BASE;
-  let lambdaAway = (aFor * hAga) / AWAY_BASE;
+  // league's typical split, with home advantage already baked in.
+  let lambdaHome = (hFor * aAga) / homeBase;
+  let lambdaAway = (aFor * hAga) / awayBase;
   let model = "form";
 
   // Blend in the Elo view when season ratings are supplied. Both models output
   // a (λhome, λaway) pair; we weight-average them so the final grid reflects
   // recent form AND season-long strength.
   if (elo && elo.home != null && elo.away != null) {
-    const eloLambdas = eloExpectedGoals(elo.home, elo.away, HOME_BASE + AWAY_BASE);
+    const eloLambdas = eloExpectedGoals(elo.home, elo.away, homeBase + awayBase);
     const w = BLEND_FORM_WEIGHT;
     lambdaHome = w * lambdaHome + (1 - w) * eloLambdas.lambdaHome;
     lambdaAway = w * lambdaAway + (1 - w) * eloLambdas.lambdaAway;

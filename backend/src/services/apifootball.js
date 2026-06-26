@@ -387,3 +387,23 @@ export async function fetchFixtureOdds(fixtureId) {
   if (!Object.keys(best).length) return null;
   return { bookmakers: books.length, best };
 }
+
+// Players unavailable for a fixture (injured / suspended). API-Football populates
+// this from ~a few days before kickoff. `type` is "Missing Fixture" (definitely
+// out) or "Questionable" (doubtful); `reason` is the cause (e.g. "Hamstring
+// Injury", "Suspended"). Empty/none → returns [].
+export async function fetchFixtureInjuries(fixtureId) {
+  const json = await request(`/injuries?fixture=${fixtureId}`);
+  const list = Array.isArray(json?.response) ? json.response : [];
+  return list
+    .map((r) => ({
+      teamId: r.team?.id,
+      teamName: r.team?.name,
+      playerId: r.player?.id,
+      playerName: r.player?.name,
+      photo: r.player?.photo || null,
+      type: r.player?.type || null,
+      reason: r.player?.reason || null,
+    }))
+    .filter((x) => x.playerId && x.teamId);
+}

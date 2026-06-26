@@ -32,11 +32,12 @@ export default function VipBetPage() {
       <div style={styles.note}>
         <span aria-hidden="true">💎</span>
         <span>
-          A short, higher-odds slip — the opposite of Safe Bets. For each match we
-          take the <strong>best-priced</strong> market the model still rates likely
-          (team 2+ goals, value wins, over 2.5, BTTS, first-half corners), then keep
-          only a handful for a bigger combined return. Higher reward means higher
-          risk — model estimates only, not betting advice, never guaranteed.
+          A <strong>bet builder</strong> per match. Each card lists every pick the
+          model rates likely — the favourite to win, either side to score or score
+          2+, over 2.5, both teams to score, first-half corners — with its % and
+          fair price, plus a combined price for the lot. Picks in a game are
+          correlated (a high-scoring match tends to hit several at once), so build
+          your own from the menu. Best matches first. Model estimates, not advice.
         </span>
       </div>
 
@@ -48,60 +49,54 @@ export default function VipBetPage() {
         )}
         {!isLoading && !isError && data?.totalMatches > 0 && slips.length === 0 && (
           <p style={styles.empty}>
-            No matches today clear the VIP confidence bar. Check back closer to kickoff.
+            No clear favourites to build on today. Check back closer to kickoff.
           </p>
         )}
-        {slips.map((slip) => <SlipCard key={slip.tier.name} slip={slip} />)}
+        {slips.map((slip) => <SlipCard key={slip.matchId} slip={slip} />)}
       </div>
     </div>
   );
 }
 
 function SlipCard({ slip }) {
-  const { tier, legs, combinedOdds, combinedProbability, legCount } = slip;
+  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount } = slip;
+  const ko = kickoff
+    ? new Date(kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : "--:--";
   return (
     <div style={styles.card}>
       <div style={styles.cardHead}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={styles.cardTitle}>
-            <span style={styles.diamond}>💎</span> {tier.name}
+            <span style={styles.diamond}>💎</span> {home} v {away}
           </div>
           <div style={styles.cardSub}>
-            {tier.subtitle} · {legCount} leg{legCount === 1 ? "" : "s"}
-            {combinedProbability != null && <> · {combinedProbability}% combined chance</>}
+            {leagueFlag} {league} · {ko} · {legCount} pick{legCount === 1 ? "" : "s"}
+            {lean ? <> · {lean}</> : null}
           </div>
         </div>
         <div style={styles.oddsBox}>
           <span style={styles.oddsValue}>{combinedOdds.toFixed(2)}</span>
-          <span style={styles.oddsLabel}>combined</span>
+          <span style={styles.oddsLabel}>all legs</span>
         </div>
       </div>
 
-      {legs.map((leg) => <Leg key={`${leg.matchId}-${leg.marketKey}`} leg={leg} />)}
+      {legs.map((leg) => <Leg key={leg.marketKey} leg={leg} />)}
     </div>
   );
 }
 
 function Leg({ leg }) {
-  const kickoff = leg.kickoff
-    ? new Date(leg.kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : "--:--";
   return (
     <div style={styles.leg}>
       <div style={styles.legMain}>
-        <div style={styles.legMatch}>
-          <span style={styles.legTeams}>{leg.home} v {leg.away}</span>
-          <span style={styles.legMeta}>
-            {leg.leagueFlag} {leg.league} · {kickoff}
-          </span>
-        </div>
-        <div style={styles.legPick}>
-          <span style={styles.legSelection}>{leg.selection}</span>
+        <span style={styles.legSelection}>{leg.selection}</span>
+        <div style={styles.legMetaRow}>
           <span style={styles.legMarket}>{leg.market}</span>
+          {leg.bookOdds != null && (
+            <span style={styles.legBook}>Best {leg.bookOdds.toFixed(2)} @ {leg.bookmaker}</span>
+          )}
         </div>
-        {leg.bookOdds != null && (
-          <span style={styles.legBook}>Best {leg.bookOdds.toFixed(2)} @ {leg.bookmaker}</span>
-        )}
       </div>
       <div style={styles.legNums}>
         <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}%</span>
@@ -143,7 +138,8 @@ const styles = {
   legTeams: { fontSize: 14, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   legMeta: { fontSize: 11, color: "var(--text3)" },
   legPick: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  legSelection: { fontSize: 13, fontWeight: 600, color: "var(--accent)" },
+  legMetaRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  legSelection: { fontSize: 14, fontWeight: 600, color: "var(--accent)" },
   legMarket: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, background: "var(--bg3)", borderRadius: 4, padding: "1px 6px" },
   legBook: { fontSize: 11, color: "var(--text2)" },
   legNums: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 },

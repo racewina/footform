@@ -11,8 +11,9 @@ import {
   fetchTeamSquadByMinutes,
   fetchFixtureStats,
   fetchFixtureOdds,
+  fetchFixtureInjuries,
 } from "../services/apifootball.js";
-import { computePrediction, parseFormFromEvents, blendPrediction } from "../services/predictions.js";
+import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines } from "../services/predictions.js";
 import { playerProps } from "../services/players.js";
 import { teamCornerRates, computeCornerPrediction } from "../services/corners.js";
 import {
@@ -111,6 +112,13 @@ async function getLeagueElo(leagueId, seasonId) {
   return buildEloModel(events);
 }
 
+// The league's own home/away goal baselines (per-league calibration), from its
+// cached season events. Cheap to recompute; reuses the same cached events as Elo.
+async function getLeagueBaselines(leagueId, seasonId) {
+  const events = await getLeaguePastEvents(leagueId, seasonId);
+  return leagueBaselines(events);
+}
+
 // One player's summed season stats, cached per player+season (these are stable,
 // so a long TTL keeps the player-props fan-out cheap). For World Cup props the
 // caller passes a CLUB season; if that season has no minutes (e.g. a league
@@ -199,6 +207,34 @@ async function getFixtureOdds(fixtureId) {
   const odds = await fetchFixtureOdds(fixtureId).catch(() => null);
   cacheSet(cacheKey, odds || null, TTL.FIXTURES);
   return odds;
+}
+
+// Raw injury rows for a fixture (with player ids), cached for the form TTL
+// (injury news moves slowly). Used to display the unavailable list on the card.
+async function getFixtureInjuryRows(fixtureId) {
+  const cacheKey = `injuries:${fixtureId}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+  const rows = await fetchFixtureInjuries(fixtureId).catch(() => []);
+  cacheSet(cacheKey, rows, TTL.TEAM_FORM);
+  return rows;
+}
+
+// Injured/suspended players for a fixture, grouped by side. Definite outs go in
+// `.home`/`.away`; doubtful ("Questionable") players go under `.doubtful`.
+async function getFixtureInjuries(fixtureId, homeId, awayId) {
+  const rows = await getFixtureInjuryRows(fixtureId);
+  if (!rows.length) return null;
+  const out = { home: [], away: [], doubtful: { home: [], away: [] } };
+  for (const r of rows) {
+    const side = r.teamId === homeId ? "home" : r.teamId === awayId ? "away" : null;
+    if (!side) continue;
+    const entry = { name: r.playerName, reason: r.reason };
+    if (/quest/i.test(r.type || "")) out.doubtful[side].push(entry);
+    else out[side].push(entry);
+  }
+  if (!out.home.length && !out.away.length && !out.doubtful.home.length && !out.doubtful.away.length) return null;
+  return out;
 }
 
 // Decorate each leg of a set of slips with the best bookmaker price for its
@@ -322,14 +358,20 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   // Season Elo ratings (second model) for the blend. Failure falls back to the
   // form-only prediction so one bad upstream never blanks the matchday.
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+  const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
   // Bookmaker odds for the upcoming fixtures (fetched in parallel, cached per
   // fixture). The market corrects the model's team-strength blind spots; odds
-  // only exist pre-kickoff, so finished matches stay pure-model.
+  // only exist pre-kickoff, so finished matches stay pure-model. Injury news is
+  // fetched alongside so the card can flag unavailable players.
   const oddsMap = {};
+  const injMap = {};
   await Promise.all(
     fixtures
       .filter((f) => f.status !== "finished" && f.homeTeam.id && f.awayTeam.id)
-      .map(async (f) => { oddsMap[f.id] = await getFixtureOdds(f.id).catch(() => null); })
+      .flatMap((f) => [
+        getFixtureOdds(f.id).then((o) => { oddsMap[f.id] = o; }).catch(() => {}),
+        getFixtureInjuries(f.id, f.homeTeam.id, f.awayTeam.id).then((i) => { injMap[f.id] = i; }).catch(() => {}),
+      ])
   );
   for (const fx of fixtures) {
     if (!fx.homeTeam.id || !fx.awayTeam.id) {
@@ -341,8 +383,9 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
-    fx.prediction = computePrediction(homeForm, awayForm, eloRatings);
+    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
     if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
+    if (injMap[fx.id]) fx.injuries = injMap[fx.id];
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };
@@ -383,6 +426,7 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
   );
   // Season Elo for the blend, with leak-free pre-kickoff rating snapshots.
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+  const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
 
   const matches = dayEvents.map((e) => {
     const homeId = e.homeTeam?.id;
@@ -407,7 +451,7 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
     const grade = prediction.markets
       ? gradeMatch(prediction.markets, homeScore, awayScore)
       : null;
@@ -475,6 +519,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     inWindow.flatMap((e) => [e.homeTeam?.id, e.awayTeam?.id])
   );
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+  const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
 
   const perDay = {};
   const grades = [];
@@ -488,7 +533,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
     if (!prediction.markets) continue;
 
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
@@ -524,6 +569,7 @@ async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
     inWindow.flatMap((e) => [e.homeTeam?.id, e.awayTeam?.id])
   );
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+  const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
 
   const perDay = {};
   for (const e of inWindow) {
@@ -534,7 +580,7 @@ async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
     if (!prediction.markets) continue;
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
 

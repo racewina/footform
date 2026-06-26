@@ -449,6 +449,8 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
         );
       })()}
 
+      {fixture.injuries && <InjuryStrip injuries={fixture.injuries} home={fixture.homeTeam} away={fixture.awayTeam} />}
+
       {(canShowPlayers || canShowCorners || p?.markets) && (
         <div style={styles.actionRow}>
           {canShowPlayers && (
@@ -813,6 +815,36 @@ function AChip({ label, val, raw, hit, active }) {
   );
 }
 
+// Injured / suspended players for a fixture. Definite outs are shown prominently;
+// doubtful players get a lighter "doubt" treatment. Only renders sides that have
+// someone unavailable.
+function InjuryStrip({ injuries, home, away }) {
+  const sideName = (t) => t?.shortName || t?.name || "";
+  const Row = ({ team, out = [], doubt = [] }) => {
+    if (!out.length && !doubt.length) return null;
+    return (
+      <div style={styles.injRow}>
+        <span style={styles.injTeam}>{team}</span>
+        <span style={styles.injPlayers}>
+          {out.map((p, i) => (
+            <span key={`o${i}`} style={styles.injOut} title={p.reason || "Out"}>{p.name}</span>
+          ))}
+          {doubt.map((p, i) => (
+            <span key={`d${i}`} style={styles.injDoubt} title={p.reason ? `Doubtful — ${p.reason}` : "Doubtful"}>{p.name}?</span>
+          ))}
+        </span>
+      </div>
+    );
+  };
+  return (
+    <div style={styles.injWrap}>
+      <span style={styles.injLabel}>🏥 Unavailable</span>
+      <Row team={sideName(home)} out={injuries.home} doubt={injuries.doubtful?.home} />
+      <Row team={sideName(away)} out={injuries.away} doubt={injuries.doubtful?.away} />
+    </div>
+  );
+}
+
 function GoalStat({ label, val = 0, active }) {
   const color = pctColor(val);
   return (
@@ -937,6 +969,13 @@ const styles = {
   aChipLabel: { fontSize: 11, color: "var(--text3)", whiteSpace: "nowrap" },
   aChipVal: { fontSize: 16, fontWeight: 700 },
   aExpandGoals: { padding: "12px 16px 0" },
+  injWrap: { display: "flex", flexDirection: "column", gap: 4, padding: "0 16px 12px" },
+  injLabel: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5 },
+  injRow: { display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 },
+  injTeam: { fontSize: 12, color: "var(--text3)", flexShrink: 0, width: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  injPlayers: { display: "flex", gap: 6, flexWrap: "wrap", minWidth: 0 },
+  injOut: { fontSize: 12, color: "var(--loss)", background: "rgba(231,76,60,0.12)", borderRadius: 4, padding: "1px 6px" },
+  injDoubt: { fontSize: 12, color: "var(--draw)", background: "rgba(241,196,15,0.12)", borderRadius: 4, padding: "1px 6px" },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 },
   modal: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, width: "100%", maxWidth: 440, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" },
   modalHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "16px 18px", borderBottom: "1px solid var(--border)" },

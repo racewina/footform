@@ -1,29 +1,22 @@
-// Build "VIP" accumulators — a SMALL, high-odds curated slip, deliberately
-// different from Safe Bets.
+// VIP — a "bet builder" browser for the day's favourable teams.
 //
-// Safe Bets takes the single SAFEST market per match (highest probability,
-// safer side of two-way markets) and stacks many ~90% legs until the running
-// odds creep into a low band (3-5, 7-10). The legs are dull on purpose.
+// For every fixture with a clear favourite, we surface that team's full menu of
+// CORRELATED picks — to win, to score (1+), to score 2+, the match over 2.5, and
+// to win first-half corners — each with its model probability and fair price, and
+// a combined price if you took the lot. Several teams are listed (most dominant
+// first) so you can browse the day's possibilities and build your own slip.
 //
-// VIP flips that philosophy:
-//   • it draws from JUICIER markets — team 2+ goals, value wins, over 2.5, both
-//     teams to score, and first-half corner 2+/3+ — things that pay more;
-//   • for each match it picks the BEST-ODDS selection that still clears a
-//     confidence floor, instead of the safest one. (The user noticed odds vary
-//     across a match's markets; VIP backs the bigger price when the model is
-//     still confident enough to justify it.)
-//   • it keeps the slip SHORT — a handful of legs — for a bigger combined price.
-//
-// The model's probability is the gate: a leg must sit inside [MIN_PROB, MAX_PROB]
-// — likely enough to back, but not a no-value near-certainty.
+// Why one team per card: these picks are positively correlated — when a strong
+// side controls a game they tend to land together — so stacking within ONE match
+// is a real edge, whereas combining different matches just needs two dominations
+// at once (the flaw that sank the old VIP).
 
 const round2 = (x) => Math.round(x * 100) / 100;
 
-export const VIP_MIN_PROB = 55; // a leg must be at least this likely to qualify
-export const VIP_MAX_PROB = 88; // skip near-certainties — no price, no point
-
-// Goal / result candidate selections for a fixture. VIP only backs things TO
-// happen (the "yes" side), never lays them, so these are one-directional.
+// Kept for the route's corner-shortlist ranking (which fixtures deserve a corner
+// fetch). The goal/result candidate menu for a fixture.
+export const VIP_MIN_PROB = 55;
+export const VIP_MAX_PROB = 88;
 export function goalWinCandidates(fx) {
   const m = fx.prediction?.markets;
   if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) return [];
@@ -34,114 +27,108 @@ export function goalWinCandidates(fx) {
     { marketKey: "winner", market: "Match Result", selection: `${fav} to win`, prob: m.win },
     { marketKey: "home2Plus", market: "Team Goals", selection: `${home} 2+ goals`, prob: m.home2Plus },
     { marketKey: "away2Plus", market: "Team Goals", selection: `${away} 2+ goals`, prob: m.away2Plus },
-    { marketKey: "home1Plus", market: "Team Goals", selection: `${home} to score`, prob: m.home1Plus },
-    { marketKey: "away1Plus", market: "Team Goals", selection: `${away} to score`, prob: m.away1Plus },
     { marketKey: "over25", market: "Total Goals", selection: "Over 2.5 goals", prob: m.over25 },
     { marketKey: "btts", market: "BTTS", selection: "Both teams to score", prob: m.btts },
   ].filter((c) => typeof c.prob === "number");
 }
 
-// First-half corner candidate selections, derived from a computed corner
-// prediction (computeCornerPrediction output). Corner legs aren't gradeable
-// (the feed has no per-half corner data), so they never carry a `hit`.
-export function cornerCandidates(fx, corner) {
-  const c = corner?.prediction || corner;
-  if (!c) return [];
+const BUILDER_MAX = 8; // up to this many matches listed as builders
+// Per-pick floors: a pick must be at least this likely to make the menu.
+const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2: 52, corner3: 40 };
+
+// A whole-match bet-builder: every correlated pick the model rates likely across
+// BOTH teams — the favourite to win, either side to score / score 2+, over 2.5,
+// both teams to score, and first-half corners for the stronger side. Returns null
+// when fewer than two picks qualify (nothing worth building on).
+function matchBuilder(fx, g, corner) {
+  const p = fx.prediction;
+  const m = p?.markets;
+  if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) return null;
+
   const home = fx.homeTeam.shortName || fx.homeTeam.name;
   const away = fx.awayTeam.shortName || fx.awayTeam.name;
-  const out = [];
-  if (c.home) {
-    out.push({ marketKey: "cornerHomeFh2", market: "1H Corners", selection: `${home} 2+ corners (1st half)`, prob: c.home.fh2Plus });
-    out.push({ marketKey: "cornerHomeFh3", market: "1H Corners", selection: `${home} 3+ corners (1st half)`, prob: c.home.fh3Plus });
-  }
-  if (c.away) {
-    out.push({ marketKey: "cornerAwayFh2", market: "1H Corners", selection: `${away} 2+ corners (1st half)`, prob: c.away.fh2Plus });
-    out.push({ marketKey: "cornerAwayFh3", market: "1H Corners", selection: `${away} 3+ corners (1st half)`, prob: c.away.fh3Plus });
-  }
-  return out.filter((x) => typeof x.prob === "number");
-}
+  const homeFav = (p.home ?? 0) >= (p.away ?? 0);
+  const favWin = Math.max(p.home ?? 0, p.away ?? 0) || m.win || 0;
+  const favTeam = homeFav ? home : away;
+  const c = corner?.prediction || corner;
+  const cTeam = c ? (homeFav ? c.home : c.away) : null;
 
-// One VIP leg per fixture: among every qualifying market, the one with the BEST
-// ODDS (lowest probability inside the confidence band = juiciest price). This is
-// the "check the best odds market while making the selection" rule.
-export function buildVipPool(leagues, cornerMap = {}) {
-  const pool = [];
-  for (const g of leagues || []) {
-    for (const fx of g.fixtures || []) {
-      const corner = cornerMap[fx.id] || null;
-      const cands = [...goalWinCandidates(fx), ...cornerCandidates(fx, corner)]
-        .filter((c) => c.prob >= VIP_MIN_PROB && c.prob <= VIP_MAX_PROB);
-      if (!cands.length) continue;
+  const cands = [
+    { ok: favWin >= FLOOR.win, marketKey: "winner", market: "Match Result", selection: `${favTeam} to win`, prob: favWin },
+    { ok: m.home1Plus >= FLOOR.score1, marketKey: "home1Plus", market: "Team Goals", selection: `${home} to score`, prob: m.home1Plus },
+    { ok: m.away1Plus >= FLOOR.score1, marketKey: "away1Plus", market: "Team Goals", selection: `${away} to score`, prob: m.away1Plus },
+    { ok: m.home2Plus >= FLOOR.twoPlus, marketKey: "home2Plus", market: "Team Goals", selection: `${home} 2+ goals`, prob: m.home2Plus },
+    { ok: m.away2Plus >= FLOOR.twoPlus, marketKey: "away2Plus", market: "Team Goals", selection: `${away} 2+ goals`, prob: m.away2Plus },
+    { ok: m.over25 >= FLOOR.over25, marketKey: "over25", market: "Total Goals", selection: "Over 2.5 goals", prob: m.over25 },
+    { ok: m.btts >= FLOOR.btts, marketKey: "btts", market: "BTTS", selection: "Both teams to score", prob: m.btts },
+    cTeam && { ok: cTeam.fh2Plus >= FLOOR.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
+  ].filter((x) => x && x.ok && typeof x.prob === "number");
 
-      // Best odds = lowest probability still inside the band.
-      const pick = cands.reduce((a, b) => (b.prob < a.prob ? b : a));
-      const leg = {
-        matchId: fx.id,
-        home: fx.homeTeam?.name,
-        away: fx.awayTeam?.name,
-        homeLogo: fx.homeTeam?.logo,
-        awayLogo: fx.awayTeam?.logo,
-        league: g.league?.name,
-        leagueFlag: g.league?.flag,
-        kickoff: fx.startTimestamp,
-        market: pick.market,
-        marketKey: pick.marketKey,
-        selection: pick.selection,
-        probability: pick.prob,
-        odds: round2(100 / pick.prob),
-      };
-      // For the track-record path: carry the graded outcome when the source is a
-      // finished, gradeable goal/result market. Corner legs have no grade key.
-      if (fx.grade?.grades?.[pick.marketKey]) {
-        leg.hit = !!fx.grade.grades[pick.marketKey].hit;
-      }
-      if (fx.homeScore != null && fx.awayScore != null) {
-        leg.homeScore = fx.homeScore;
-        leg.awayScore = fx.awayScore;
-      }
-      pool.push(leg);
-    }
-  }
-  return pool;
-}
+  if (cands.length < 2) return null;
 
-// Two VIP products from the same pool. They differ in size AND ranking key so
-// they're genuinely distinct slips, not nested subsets:
-//   • VIP        — the most CONFIDENT few of the high-odds picks (value first)
-//   • VIP Boost  — the few BIGGEST-ODDS picks (long-shot, max combined price)
-export const VIP_TIERS = [
-  { name: "VIP", subtitle: "Most confident value picks of the day", maxLegs: 5, sort: "prob" },
-  { name: "VIP Boost", subtitle: "Fewer legs, biggest combined price", maxLegs: 3, sort: "odds" },
-];
-
-function assembleSlip(pool, tier) {
-  const sorted = [...pool].sort((a, b) =>
-    tier.sort === "odds" ? b.odds - a.odds : b.probability - a.probability
-  );
-  const legs = sorted.slice(0, tier.maxLegs);
+  const legs = cands.map((cand) => {
+    const leg = {
+      matchId: fx.id,
+      home: fx.homeTeam?.name,
+      away: fx.awayTeam?.name,
+      homeLogo: fx.homeTeam?.logo,
+      awayLogo: fx.awayTeam?.logo,
+      league: g.league?.name,
+      leagueFlag: g.league?.flag,
+      kickoff: fx.startTimestamp,
+      market: cand.market,
+      marketKey: cand.marketKey,
+      selection: cand.selection,
+      probability: cand.prob,
+      odds: round2(100 / cand.prob),
+    };
+    if (fx.grade?.grades?.[cand.marketKey]) leg.hit = !!fx.grade.grades[cand.marketKey].hit;
+    if (fx.homeScore != null && fx.awayScore != null) { leg.homeScore = fx.homeScore; leg.awayScore = fx.awayScore; }
+    return leg;
+  });
 
   let odds = 1;
   for (const l of legs) odds *= l.odds;
   const combinedOdds = round2(odds);
-
-  // A slip is gradeable only when EVERY leg carries a boolean outcome (so a slip
-  // that includes a corner leg stays ungraded — honest, since corners can't be
-  // checked against the feed).
   const graded = legs.length > 0 && legs.every((l) => typeof l.hit === "boolean");
   const legHits = graded ? legs.filter((l) => l.hit).length : null;
 
+  // How appealing the match is to build on — a clear favourite OR a high-scoring
+  // game both rank highly (1+ markets excluded since they're near-certain).
+  const interest = Math.max(favWin, m.over25 || 0, m.btts || 0, m.home2Plus || 0, m.away2Plus || 0);
+  const lean = favWin >= 58 ? `${favTeam} favoured` : (m.over25 >= 58 || m.btts >= 60) ? "High-scoring" : "Even, goals likely";
+
   return {
-    tier: { name: tier.name, subtitle: tier.subtitle },
+    matchId: fx.id,
+    tier: { name: `${fx.homeTeam?.name} v ${fx.awayTeam?.name}`, subtitle: lean },
+    lean,
+    home: fx.homeTeam?.name,
+    away: fx.awayTeam?.name,
+    homeLogo: fx.homeTeam?.logo,
+    awayLogo: fx.awayTeam?.logo,
+    league: g.league?.name,
+    leagueFlag: g.league?.flag,
+    kickoff: fx.startTimestamp,
+    interest,
     legs,
     legCount: legs.length,
     combinedOdds,
-    combinedProbability: legs.length ? round2(100 / odds) : null,
+    combinedProbability: round2(100 / odds),
     legHits,
     won: graded ? legHits === legs.length : null,
   };
 }
 
-export function buildVipSlips(leagues, cornerMap = {}, tiers = VIP_TIERS) {
-  const pool = buildVipPool(leagues, cornerMap);
-  return tiers.map((t) => assembleSlip(pool, t));
+// The day's match bet-builders, most appealing first. (cornerMap optional; the
+// record path passes none, so those builders carry no corner picks.)
+export function buildVipSlips(leagues, cornerMap = {}) {
+  const builders = [];
+  for (const g of leagues || []) {
+    for (const fx of g.fixtures || []) {
+      const b = matchBuilder(fx, g, cornerMap[fx.id] || null);
+      if (b) builders.push(b);
+    }
+  }
+  builders.sort((a, b) => b.interest - a.interest);
+  return builders.slice(0, BUILDER_MAX);
 }
