@@ -215,3 +215,55 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null) {
 }
 
 export { parseFormFromEvents };
+
+// Blend a model prediction with the bookmaker market. The market prices in team
+// quality, injuries and news the form/Elo model can't see, so a modest blend
+// (default 60% model / 40% market) corrects the model's biggest blind spots —
+// especially in lopsided internationals where form alone badly misreads strength.
+//
+// Each market is de-vigged (the bookmaker margin removed by normalising the
+// complementary prices) before blending, and only blended when both sides of the
+// price exist. Markets with no odds keep the pure-model number. NOTE: odds only
+// exist before kickoff, so this is applied on the live matchday path only; a
+// finished match falls back to the pure model until predictions are persisted.
+export function blendPrediction(prediction, odds, marketWeight = 0.4) {
+  if (!prediction || !odds?.best) return prediction;
+  const b = odds.best;
+  // fetchFixtureOdds stores each price as { odd, book }; pull the decimal odd.
+  const oddOf = (x) => (x && typeof x.odd === "number" ? x.odd : null);
+  const w = marketWeight, mw = 1 - marketWeight;
+  const out = { ...prediction, markets: { ...prediction.markets } };
+  let blended = false;
+
+  // 1X2: de-vig the three-way price, then blend home/draw/away.
+  const hw = oddOf(b.homeWin), dr = oddOf(b.draw), aw = oddOf(b.awayWin);
+  if (hw > 1 && dr > 1 && aw > 1) {
+    const ph = 1 / hw, pd = 1 / dr, pa = 1 / aw;
+    const s = ph + pd + pa;
+    out.home = Math.round(mw * prediction.home + w * (ph / s) * 100);
+    out.draw = Math.round(mw * prediction.draw + w * (pd / s) * 100);
+    out.away = Math.round(mw * prediction.away + w * (pa / s) * 100);
+    out.markets.win = Math.max(out.home, out.away);
+    out.markets.winner = out.home >= out.away ? "home" : "away";
+    blended = true;
+  }
+
+  // Two-way markets: de-vig (yes vs no) and blend the model's % for that key.
+  const blendTwo = (key, yes, no) => {
+    const yo = oddOf(yes), no_ = oddOf(no);
+    if (!(yo > 1) || !(no_ > 1)) return;
+    if (typeof prediction.markets[key] !== "number") return;
+    const py = 1 / yo, pn = 1 / no_;
+    out.markets[key] = Math.round(mw * prediction.markets[key] + w * (py / (py + pn)) * 100);
+    blended = true;
+  };
+  blendTwo("over25", b.over25, b.under25);
+  blendTwo("btts", b.bttsYes, b.bttsNo);
+  blendTwo("home1Plus", b.homeToScore, b.homeNoScore);
+  blendTwo("away1Plus", b.awayToScore, b.awayNoScore);
+  blendTwo("home2Plus", b.home2Plus, b.homeUnder2);
+  blendTwo("away2Plus", b.away2Plus, b.awayUnder2);
+
+  if (blended) out.marketBlended = true;
+  return out;
+}

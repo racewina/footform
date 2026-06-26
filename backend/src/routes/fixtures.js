@@ -12,7 +12,7 @@ import {
   fetchFixtureStats,
   fetchFixtureOdds,
 } from "../services/apifootball.js";
-import { computePrediction, parseFormFromEvents } from "../services/predictions.js";
+import { computePrediction, parseFormFromEvents, blendPrediction } from "../services/predictions.js";
 import { playerProps } from "../services/players.js";
 import { teamCornerRates, computeCornerPrediction } from "../services/corners.js";
 import {
@@ -322,6 +322,15 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   // Season Elo ratings (second model) for the blend. Failure falls back to the
   // form-only prediction so one bad upstream never blanks the matchday.
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
+  // Bookmaker odds for the upcoming fixtures (fetched in parallel, cached per
+  // fixture). The market corrects the model's team-strength blind spots; odds
+  // only exist pre-kickoff, so finished matches stay pure-model.
+  const oddsMap = {};
+  await Promise.all(
+    fixtures
+      .filter((f) => f.status !== "finished" && f.homeTeam.id && f.awayTeam.id)
+      .map(async (f) => { oddsMap[f.id] = await getFixtureOdds(f.id).catch(() => null); })
+  );
   for (const fx of fixtures) {
     if (!fx.homeTeam.id || !fx.awayTeam.id) {
       fx.prediction = null;
@@ -333,6 +342,7 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
     fx.prediction = computePrediction(homeForm, awayForm, eloRatings);
+    if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };

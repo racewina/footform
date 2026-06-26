@@ -298,7 +298,8 @@ export default function FixturesPage({ leagueId }) {
       <div style={styles.note}>
         <span aria-hidden="true">ⓘ</span>
         <span>
-          Predictions use each team's recent form and assume their projected
+          Predictions blend our form + Elo model with live bookmaker odds (which
+          price in team strength, injuries and news), and assume the projected
           lineup. They may change up to 30&nbsp;minutes before kickoff, when
           official team lineups are released.
         </span>
