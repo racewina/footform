@@ -216,6 +216,9 @@ export async function fetchFixtureLineups(fixtureId) {
       name: e.player?.name ?? null,
       number: e.player?.number ?? null,
       pos: e.player?.pos || null,
+      // "row:col" on the pitch (1 = GK line / leftmost). Drives the positional
+      // foul model — only present on official lineups, not the projected XI.
+      grid: e.player?.grid || null,
     })),
   }));
 }
@@ -296,7 +299,8 @@ export async function fetchPlayerSeasonStats(playerId, season) {
   if (!row) return null;
 
   const blocks = Array.isArray(row.statistics) ? row.statistics : [];
-  let minutes = 0, apps = 0, goals = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0, shotsOnTarget = 0;
+  let minutes = 0, apps = 0, goals = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0;
+  let shots = 0, shotsOnTarget = 0, yellow = 0, dribbles = 0;
   let pos = null, posMinutes = -1;
   for (const b of blocks) {
     const m = b.games?.minutes || 0;
@@ -306,7 +310,12 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     foulsCommitted += b.fouls?.committed || 0;
     foulsDrawn += b.fouls?.drawn || 0;
     tackles += b.tackles?.total || 0;
+    shots += b.shots?.total || 0;
     shotsOnTarget += b.shots?.on || 0;
+    yellow += b.cards?.yellow || 0;
+    // Dribble attempts — the ball-carrying threat that feeds the positional
+    // foul model (a winger who runs at defenders draws fouls from them).
+    dribbles += b.dribbles?.attempts || 0;
     // Position from whichever competition they played the most in.
     if (m > posMinutes) { posMinutes = m; pos = b.games?.position || pos; }
   }
@@ -322,7 +331,10 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     foulsCommitted,
     foulsDrawn,
     tackles,
+    shots,
     shotsOnTarget,
+    yellow,
+    dribbles,
   };
 }
 

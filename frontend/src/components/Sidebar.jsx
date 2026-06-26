@@ -111,6 +111,20 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
           <button
             style={{
               ...styles.todayItem,
+              ...(String(selectedId) === "props-finder" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("props-finder");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🔎</span>
+            <span style={styles.itemName}>Props Finder</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
               ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
