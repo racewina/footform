@@ -34,6 +34,13 @@ app.use("/api", limiter);
 // shared by everyone, and stale-while-revalidate serves the cached copy
 // instantly while a fresh one rebuilds in the background — so users stop hitting
 // the cold path. Only successful (2xx) GETs are cached; errors are never stored.
+//
+// s-maxage=600  → the edge copy is "fresh" for 10 min (data stays current).
+// stale-while-revalidate=86400 → after that, the edge keeps serving the cached
+//   copy for up to a day while it refreshes in the background. This is the key to
+//   fast opens: a visitor after a quiet stretch gets an INSTANT stale response
+//   instead of waiting for a cold function + cold cache to rebuild. The only
+//   truly-cold open is the first hit in 24h.
 app.use("/api", (req, res, next) => {
   if (req.method !== "GET" || req.path === "/health") return next();
   const sendJson = res.json.bind(res);
@@ -41,7 +48,7 @@ app.use("/api", (req, res, next) => {
     res.set(
       "Cache-Control",
       res.statusCode >= 200 && res.statusCode < 300
-        ? "public, s-maxage=600, stale-while-revalidate=3600"
+        ? "public, s-maxage=600, stale-while-revalidate=86400"
         : "no-store"
     );
     return sendJson(body);
