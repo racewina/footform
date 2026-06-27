@@ -16,6 +16,10 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
 
   const [leaguesOpen, setLeaguesOpen] = useState(false);
 
+  // Some views are kept for local use only — hidden on the deployed site, shown
+  // when running on localhost (the dev box). Keeps the public sidebar focused.
+  const localOnly = typeof window !== "undefined" && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+
   const leagues = data?.leagues || [];
   const byCountry = leagues.reduce((acc, l) => {
     (acc[l.country] ||= []).push(l);
@@ -94,6 +98,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.itemName}>Today's Matches</span>
           </button>
 
+          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -107,6 +112,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.todayIcon}>📊</span>
             <span style={styles.itemName}>Track Record</span>
           </button>
+          )}
 
           <button
             style={{
@@ -136,6 +142,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.itemName}>Safe Bets</span>
           </button>
 
+          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -149,6 +156,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.todayIcon}>🧾</span>
             <span style={styles.itemName}>Safe Bets Record</span>
           </button>
+          )}
 
           <button
             style={{
@@ -164,6 +172,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.itemName}>VIP Bet</span>
           </button>
 
+          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -177,7 +186,9 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.todayIcon}>📈</span>
             <span style={styles.itemName}>Value Bets</span>
           </button>
+          )}
 
+          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -191,6 +202,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <span style={styles.todayIcon}>💹</span>
             <span style={styles.itemName}>ROI Tracker</span>
           </button>
+          )}
 
         </nav>
       </aside>
