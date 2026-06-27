@@ -23,7 +23,7 @@ import {
   summarizeAccuracy,
 } from "../services/backtest.js";
 import { buildAccumulators, buildLegPool } from "../services/accumulator.js";
-import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB } from "../services/vipbet.js";
+import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB, MARQUEE_LEAGUES } from "../services/vipbet.js";
 import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { buildEloModel } from "../services/elo.js";
@@ -1015,10 +1015,16 @@ router.get("/vip", async (req, res) => {
       }
     }
 
+    // Two batches: a "Top Matches" slate from the marquee competitions (so the
+    // headline games always feature, even when a high-scoring minor league
+    // out-scores them on interest), and the general slate across every league.
+    const marqueeLeagues = leagues.filter((g) => MARQUEE_LEAGUES.has(String(g.league.id)));
+    const featured = buildVipSlips(marqueeLeagues, cornerMap, 6);
     const slips = buildVipSlips(leagues, cornerMap);
+    await attachBookOddsToSlips(featured, marqueeLeagues);
     await attachBookOddsToSlips(slips, leagues);
 
-    const result = { date: targetDate, totalMatches, slips };
+    const result = { date: targetDate, totalMatches, featured, slips };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {

@@ -119,9 +119,27 @@ function matchBuilder(fx, g, corner) {
   };
 }
 
+// Marquee competitions for the "Top Matches" VIP batch — the World Cup, the
+// European cups and the big domestic leagues. These get their own slate so a
+// high-scoring minor league can't crowd the headline games out of the VIP.
+export const MARQUEE_LEAGUES = new Set([
+  "1",   // World Cup
+  "2",   // Champions League
+  "3",   // Europa League
+  "848", // Conference League
+  "39",  // Premier League
+  "140", // La Liga
+  "135", // Serie A
+  "78",  // Bundesliga
+  "61",  // Ligue 1
+  "71",  // Brasileirão Série A
+]);
+
 // The day's match bet-builders, most appealing first. (cornerMap optional; the
-// record path passes none, so those builders carry no corner picks.)
-export function buildVipSlips(leagues, cornerMap = {}) {
+// record path passes none, so those builders carry no corner picks.) `maxSlips`
+// caps the list — the general slate uses the default, the Top Matches batch a
+// smaller number.
+export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX) {
   const builders = [];
   for (const g of leagues || []) {
     for (const fx of g.fixtures || []) {
@@ -130,5 +148,5 @@ export function buildVipSlips(leagues, cornerMap = {}) {
     }
   }
   builders.sort((a, b) => b.interest - a.interest);
-  return builders.slice(0, BUILDER_MAX);
+  return builders.slice(0, maxSlips);
 }

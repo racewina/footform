@@ -25,7 +25,13 @@ export default function VipBetPage() {
     queryFn: fetchVip,
   });
 
-  const slips = (data?.slips || []).filter((s) => s.legCount > 0);
+  // Two batches: the headline "Top Matches" from the marquee competitions, then
+  // the general slate. The general list drops any match already featured up top
+  // so a headline game never appears twice.
+  const featured = (data?.featured || []).filter((s) => s.legCount > 0);
+  const featuredIds = new Set(featured.map((s) => s.matchId));
+  const others = (data?.slips || []).filter((s) => s.legCount > 0 && !featuredIds.has(s.matchId));
+  const hasAny = featured.length > 0 || others.length > 0;
 
   return (
     <div style={styles.page}>
@@ -37,7 +43,8 @@ export default function VipBetPage() {
           2+, over 2.5, both teams to score, first-half corners — with its % and
           fair price, plus a combined price for the lot. Picks in a game are
           correlated (a high-scoring match tends to hit several at once), so build
-          your own from the menu. Best matches first. Model estimates, not advice.
+          your own from the menu. <strong>Top Matches</strong> features the headline
+          competitions; the rest follows. Model estimates, not advice.
         </span>
       </div>
 
@@ -47,13 +54,32 @@ export default function VipBetPage() {
         {!isLoading && !isError && data?.totalMatches === 0 && (
           <p style={styles.empty}>No scheduled matches today to build a VIP slip from.</p>
         )}
-        {!isLoading && !isError && data?.totalMatches > 0 && slips.length === 0 && (
+        {!isLoading && !isError && data?.totalMatches > 0 && !hasAny && (
           <p style={styles.empty}>
             No clear favourites to build on today. Check back closer to kickoff.
           </p>
         )}
-        {slips.map((slip) => <SlipCard key={slip.matchId} slip={slip} />)}
+
+        {featured.length > 0 && (
+          <SectionTitle icon="⭐" title="Top Matches" subtitle="Headline competitions" />
+        )}
+        {featured.map((slip) => <SlipCard key={`f-${slip.matchId}`} slip={slip} />)}
+
+        {featured.length > 0 && others.length > 0 && (
+          <SectionTitle icon="💎" title="More VIP Builders" subtitle="Across all leagues" />
+        )}
+        {others.map((slip) => <SlipCard key={slip.matchId} slip={slip} />)}
       </div>
+    </div>
+  );
+}
+
+function SectionTitle({ icon, title, subtitle }) {
+  return (
+    <div style={styles.sectionTitle}>
+      <span style={styles.sectionIcon} aria-hidden="true">{icon}</span>
+      <span style={styles.sectionName}>{title}</span>
+      {subtitle && <span style={styles.sectionSub}>{subtitle}</span>}
     </div>
   );
 }
@@ -122,6 +148,11 @@ const styles = {
   list: { flex: 1, overflowY: "auto", padding: "16px 24px", display: "flex", flexDirection: "column", gap: 16, maxWidth: 820, width: "100%", margin: "0 auto" },
   empty: { color: "var(--text3)", textAlign: "center", padding: 40 },
   error: { color: "var(--loss)", textAlign: "center", padding: 20 },
+
+  sectionTitle: { display: "flex", alignItems: "baseline", gap: 8, padding: "4px 2px", marginTop: 4 },
+  sectionIcon: { fontSize: 15 },
+  sectionName: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "var(--text)" },
+  sectionSub: { fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 },
 
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", flexShrink: 0 },
   cardHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", borderBottom: "1px solid var(--border)" },
