@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Analytics } from "@vercel/analytics/react";
 import Sidebar from "./components/Sidebar";
 import FixturesPage from "./pages/FixturesPage";
 import ResultsPage from "./pages/ResultsPage";
@@ -60,6 +61,7 @@ export default function App() {
           }
         </main>
       </div>
+      <Analytics />
     </QueryClientProvider>
   );
 }
