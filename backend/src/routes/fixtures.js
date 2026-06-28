@@ -1332,6 +1332,15 @@ router.get("/props-finder", async (req, res) => {
     matches.sort((a, b) => (a.kickoff ?? 0) - (b.kickoff ?? 0));
     const leagueList = [...leagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
+    // No league or match chosen yet → return only the selector lists, skipping
+    // the expensive per-fixture player-props fan-out. Players load once the user
+    // narrows to a league or a single match.
+    if (!leagueId && !matchId) {
+      const result = { date: targetDate, within: within || null, match: null, league: null, count: 0, matches, leagues: leagueList, players: [] };
+      cacheSet(cacheKey, result, TTL.FIXTURES);
+      return res.json({ ...result, fromCache: false });
+    }
+
     const players = [];
     for (const g of leagues) {
       if (leagueId && String(g.league.id) !== leagueId) continue;

@@ -70,7 +70,7 @@ export default function PropsFinderPage() {
   const [stat, setStat] = useState("foul");
   const [tier, setTier] = useState(2);
   const [league, setLeague] = useState("all");
-  const [within, setWithin] = useState("6");
+  const [within, setWithin] = useState("all");
   const [match, setMatch] = useState("all");
 
   const { data, isLoading, isError, error } = useQuery({
@@ -84,6 +84,9 @@ export default function PropsFinderPage() {
   const matches = data?.matches || [];
   const leagues = data?.leagues || [];
   const singleMatch = match !== "all";
+  // Players are only fetched once a league or a single match is picked — until
+  // then the page just offers the selectors (keeps the default load cheap).
+  const hasSelection = league !== "all" || match !== "all";
   // Match selector is scoped to the chosen league for a tidier list.
   const matchOptions = matches.filter((m) => league === "all" || String(m.leagueId) === String(league));
 
@@ -153,26 +156,33 @@ export default function PropsFinderPage() {
       <div style={styles.note}>
         <span aria-hidden="true">🔎</span>
         <span>
-          {singleMatch
-            ? "Players in the selected match"
-            : within === "all"
-              ? "Players across today's matches"
-              : `Players in matches kicking off within ${within}h`}{" "}
-          ranked by their chance of{" "}
-          <strong>{THRESHOLDS.find((t) => t.key === tier)?.label} {statLabel.toLowerCase()}</strong>.
-          Percentages are model estimates from each player's season rates (Poisson),
-          updated to the official XI once lineups drop. {stat === "foul" && "⚔️ marks a wide defender the positional model flags against a dribbling winger. "}
-          Not betting advice.
+          {!hasSelection
+            ? "Pick a league or a match above to find players likely to commit an event."
+            : <>
+                {singleMatch
+                  ? "Players in the selected match"
+                  : within === "all"
+                    ? "Players in the selected league"
+                    : `Players in the selected league kicking off within ${within}h`}{" "}
+                ranked by their chance of{" "}
+                <strong>{THRESHOLDS.find((t) => t.key === tier)?.label} {statLabel.toLowerCase()}</strong>.
+                Percentages are model estimates from each player's season rates (Poisson),
+                updated to the official XI once lineups drop. {stat === "foul" && "⚔️ marks a wide defender the positional model flags against a dribbling winger. "}
+                Not betting advice.
+              </>}
         </span>
       </div>
 
       <div style={styles.list}>
-        {isLoading && <Spinner />}
-        {isError && <p style={styles.error}>{error.message}</p>}
-        {!isLoading && !isError && ranked.length === 0 && (
+        {!hasSelection && (
+          <p style={styles.empty}>Select a league or a match above to load players.</p>
+        )}
+        {hasSelection && isLoading && <Spinner />}
+        {hasSelection && isError && <p style={styles.error}>{error.message}</p>}
+        {hasSelection && !isLoading && !isError && ranked.length === 0 && (
           <p style={styles.empty}>No players reach {minPct}% for this market & threshold.</p>
         )}
-        {!isLoading && !isError && ranked.map((p, i) => {
+        {hasSelection && !isLoading && !isError && ranked.map((p, i) => {
           const color = pctColor(p.val);
           const showMatchup = stat === "foul" && p.foulMatchup;
           return (
