@@ -23,6 +23,20 @@ const spinnerCSS = `
 export default function App() {
   const [selectedLeague, setSelectedLeague] = useState("today");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Lightweight in-app navigation history so a mobile/PWA back button can return
+  // to the previous view without opening the sidebar.
+  const [navStack, setNavStack] = useState([]);
+
+  const navigate = (id) => {
+    if (String(id) === String(selectedLeague)) return;
+    setNavStack((s) => [...s, selectedLeague]);
+    setSelectedLeague(id);
+  };
+  const goBack = () => {
+    if (!navStack.length) return;
+    setSelectedLeague(navStack[navStack.length - 1]);
+    setNavStack((s) => s.slice(0, -1));
+  };
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -30,12 +44,17 @@ export default function App() {
       <div style={styles.app}>
         <Sidebar
           selectedId={selectedLeague}
-          onSelect={setSelectedLeague}
+          onSelect={navigate}
           mobileOpen={mobileMenuOpen}
           onClose={() => setMobileMenuOpen(false)}
         />
         <main style={styles.main}>
           <header style={styles.header}>
+            {navStack.length > 0 && (
+              <button style={styles.backBtn} onClick={goBack} aria-label="Go back">
+                ‹
+              </button>
+            )}
             <button className="app-menu-btn" style={styles.menuBtn} onClick={() => setMobileMenuOpen(true)} aria-label="Open menu">
               ☰
             </button>
@@ -133,6 +152,7 @@ const styles = {
   main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 },
   header: { display: "flex", alignItems: "center", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--border)", background: "var(--bg2)" },
   menuBtn: { fontSize: 18, color: "var(--text2)", display: "none", padding: "4px 8px" },
+  backBtn: { fontSize: 24, lineHeight: 1, color: "var(--text2)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: "2px 12px", flexShrink: 0, cursor: "pointer" },
   leaguePill: { display: "flex", alignItems: "center", gap: 8 },
   leaguePillName: { fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 16, color: "var(--text)" },
   noLeague: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center" },

@@ -300,16 +300,11 @@ export default function FixturesPage({ leagueId }) {
         <button style={styles.navBtn} onClick={() => shift(-1)} aria-label="Previous day">
           ‹
         </button>
-        <button
-          style={styles.dateLabel}
-          onClick={() => {
-            const el = dateInputRef.current;
-            if (el?.showPicker) el.showPicker();
-            else el?.focus();
-          }}
-          aria-label="Pick a date"
-          title="Pick a date"
-        >
+        {/* The real date input overlays the whole control (transparent, full-size)
+            so a tap lands directly on it — the reliable way to open the native
+            picker on iOS Safari, where showPicker()/focus() on a hidden input
+            does nothing. */}
+        <label style={styles.dateLabel} aria-label="Pick a date" title="Pick a date">
           <span style={styles.dateLabelIcon} aria-hidden="true">📅</span>
           {prettyDate}
           {isToday && <span style={styles.todayTag}>Today</span>}
@@ -319,10 +314,8 @@ export default function FixturesPage({ leagueId }) {
             value={dateStr}
             onChange={(e) => e.target.value && goToDate(parseYmd(e.target.value))}
             style={styles.dateInput}
-            tabIndex={-1}
-            aria-hidden="true"
           />
-        </button>
+        </label>
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
       </div>
 
@@ -1049,7 +1042,7 @@ const styles = {
   navBtnDisabled: { opacity: 0.3, cursor: "not-allowed" },
   dateLabel: { position: "relative", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15, minWidth: 180, justifyContent: "center", color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 14px", cursor: "pointer" },
   dateLabelIcon: { fontSize: 13, opacity: 0.8 },
-  dateInput: { position: "absolute", left: "50%", bottom: 0, width: 1, height: 1, opacity: 0, border: "none", padding: 0, pointerEvents: "none" },
+  dateInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", WebkitAppearance: "none", appearance: "none" },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
   statusBar: { display: "flex", padding: "12px 24px 0" },
   segGroup: { display: "inline-flex", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, padding: 3, gap: 2, maxWidth: "100%", overflowX: "auto" },
