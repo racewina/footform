@@ -32,11 +32,10 @@ export default function SafeBetsPage() {
       <div style={styles.note}>
         <span aria-hidden="true">ⓘ</span>
         <span>
-          Two accumulators built from today's matches. For each game we take the
-          single market the model is most confident in, then stack the safest of
-          those picks until the combined odds reach the target band. Where the
-          market has a price, we show the best bookmaker odds next to our fair
-          odds. Model estimates only — not betting advice, and never guaranteed.
+          Two accumulators built from today's matches using our model's most
+          confident selections, combined to a target odds range. Where a price
+          exists, the best bookmaker odds are shown alongside. Estimates only —
+          not betting advice, and never guaranteed.
         </span>
       </div>
 

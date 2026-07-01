@@ -38,13 +38,12 @@ export default function VipBetPage() {
       <div style={styles.note}>
         <span aria-hidden="true">💎</span>
         <span>
-          A <strong>bet builder</strong> per match. Each card lists every pick the
-          model rates likely — the favourite to win, either side to score or score
-          2+, over 2.5, both teams to score, first-half corners — with its % and
-          fair price, plus a combined price for the lot. Picks in a game are
-          correlated (a high-scoring match tends to hit several at once), so build
-          your own from the menu. <strong>Top Matches</strong> features the headline
-          competitions; the rest follows. Model estimates, not advice.
+          A <strong>bet builder</strong> per match — every pick our model rates
+          likely (favourite to win, either side to score or score 2+, over 2.5,
+          both teams to score, first-half corners), each with its % and fair
+          price, plus a combined price for the lot. Build your own from the menu.
+          <strong> Top Matches</strong> features the headline competitions; the
+          rest follows. Estimates, not advice.
         </span>
       </div>
 

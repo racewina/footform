@@ -166,8 +166,8 @@ export default function PropsFinderPage() {
                     : `Players in the selected league kicking off within ${within}h`}{" "}
                 ranked by their chance of{" "}
                 <strong>{THRESHOLDS.find((t) => t.key === tier)?.label} {statLabel.toLowerCase()}</strong>.
-                Percentages are model estimates from each player's season rates (Poisson),
-                updated to the official XI once lineups drop. {stat === "foul" && "⚔️ marks a wide defender the positional model flags against a dribbling winger. "}
+                Percentages are our model's estimates, updated once lineups are
+                confirmed. {stat === "foul" && "⚔️ marks a standout matchup. "}
                 Not betting advice.
               </>}
         </span>
@@ -195,7 +195,7 @@ export default function PropsFinderPage() {
                 <div style={styles.nameLine}>
                   <span style={styles.name}>{p.name}</span>
                   {p.pos && <span style={styles.pos}>{p.pos}</span>}
-                  {showMatchup && <span style={styles.matchup} title={`Facing ${p.foulMatchup.opponent} (${p.foulMatchup.opponentDribbles90} dribbles/90)`}>⚔️</span>}
+                  {showMatchup && <span style={styles.matchup} title={`Standout matchup vs ${p.foulMatchup.opponent}`}>⚔️</span>}
                 </div>
                 <span style={styles.meta}>
                   {p.team} · {p.leagueFlag} {p.home} v {p.away}
