@@ -12,6 +12,7 @@ import {
   fetchFixtureStats,
   fetchFixtureOdds,
   fetchFixtureInjuries,
+  fetchLiveFixtures,
 } from "../services/apifootball.js";
 import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines } from "../services/predictions.js";
 import { playerProps } from "../services/players.js";
@@ -33,6 +34,25 @@ const router = express.Router();
 
 router.get("/leagues", (req, res) => {
   res.json({ leagues: LEAGUES });
+});
+
+// Live scores across every league in ONE upstream call (/fixtures?live=all),
+// cached ~25s so the whole audience polling every 30s collapses to roughly one
+// upstream request per cycle. A short edge cache (set here; /live is exempt from
+// the default long cache) does the same at the CDN.
+router.get("/live", async (req, res) => {
+  res.set("Cache-Control", "public, s-maxage=25, stale-while-revalidate=30");
+  const cacheKey = "live:all";
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ live: cached, count: cached.length, fromCache: true });
+  try {
+    const live = await fetchLiveFixtures();
+    cacheSet(cacheKey, live, 25); // seconds
+    res.json({ live, count: live.length, fromCache: false });
+  } catch (err) {
+    console.error(`[live] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 async function getCurrentSeason(tournamentId) {
@@ -1033,6 +1053,7 @@ router.get("/vip", async (req, res) => {
   }
 });
 
+
 // Cross-league "value bets" view: for every scheduled match today, compare the
 // model's probabilities against the best bookmaker price across all books and
 // surface the positive-edge selections (model thinks it's likelier than the
@@ -1303,7 +1324,9 @@ router.get("/props-finder", async (req, res) => {
         })
       )
     );
-    const leagues = groups.filter((g) => g && g.fixtures && g.fixtures.length);
+    // Leagues that opt out of player props (e.g. club friendlies) never appear
+    // in the Props Finder — not in the selectors, not in the fan-out.
+    const leagues = groups.filter((g) => g && g.fixtures && g.fixtures.length && !g.league.noProps);
 
     // Full list of today's upcoming matches and leagues (cheap — no props build),
     // so the UI can populate the match + league selectors with every fixture,

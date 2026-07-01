@@ -42,7 +42,8 @@ app.use("/api", limiter);
 //   instead of waiting for a cold function + cold cache to rebuild. The only
 //   truly-cold open is the first hit in 24h.
 app.use("/api", (req, res, next) => {
-  if (req.method !== "GET" || req.path === "/health") return next();
+  // /live sets its own short cache (scores must stay fresh); /health is uncached.
+  if (req.method !== "GET" || req.path === "/health" || req.path === "/live") return next();
   const sendJson = res.json.bind(res);
   res.json = (body) => {
     res.set(

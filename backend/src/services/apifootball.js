@@ -419,3 +419,22 @@ export async function fetchFixtureInjuries(fixtureId) {
     }))
     .filter((x) => x.playerId && x.teamId);
 }
+
+// Every in-play fixture across ALL leagues in a SINGLE upstream call
+// (/fixtures?live=all) — the cheapest way to power a live-score ticker, since it
+// costs one request no matter how many matches are live. Returns just what the
+// UI needs: id, current score, elapsed minute and the short status (1H, HT, 2H,
+// ET, BT, P, LIVE, INT).
+export async function fetchLiveFixtures() {
+  const json = await request(`/fixtures?live=all`);
+  const list = Array.isArray(json?.response) ? json.response : [];
+  return list
+    .map((fx) => ({
+      id: fx.fixture?.id,
+      status: fx.fixture?.status?.short || null,
+      elapsed: fx.fixture?.status?.elapsed ?? null,
+      home: fx.goals?.home ?? null,
+      away: fx.goals?.away ?? null,
+    }))
+    .filter((x) => x.id);
+}

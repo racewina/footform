@@ -106,6 +106,7 @@ const LEAGUE_NAMES = {
   "848": { name: "Conference League", flag: "🇪🇺" },
   "1": { name: "World Cup", flag: "🌍" },
   "10": { name: "International Friendlies", flag: "🤝" },
+  "667": { name: "Club Friendlies", flag: "🤝" },
 };
 
 function LeaguePill({ leagueId }) {

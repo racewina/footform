@@ -37,6 +37,35 @@ async function fetchFixtures(leagueId, date) {
   return res.json();
 }
 
+// Live scores across every league in one cheap call, polled every 30s. Returns
+// a Map of fixtureId → { home, away, elapsed, status } so a card can overlay the
+// running score without re-fetching the (edge-cached) fixtures list.
+async function fetchLive() {
+  const res = await fetch("/api/live");
+  if (!res.ok) return { live: [] };
+  return res.json();
+}
+function useLiveMap() {
+  const { data } = useQuery({
+    queryKey: ["live"],
+    queryFn: fetchLive,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: false,
+    staleTime: 25000,
+  });
+  const map = new Map();
+  for (const m of data?.live || []) map.set(m.id, m);
+  return map;
+}
+
+// Compact live indicator label from the API-Football short status + minute.
+function liveLabel(l) {
+  if (l.status === "HT") return "HT";
+  if (l.status === "P" || l.status === "PEN") return "PENS";
+  if (l.status === "BT" || l.status === "ET") return l.elapsed != null ? `ET ${l.elapsed}'` : "ET";
+  return l.elapsed != null ? `${l.elapsed}'` : "LIVE";
+}
+
 // Match-level goal markets shown as pills on every card.
 // Short, fixed-width label for a team in the compact 1X2 result row. Prefer an
 // existing short code; otherwise abbreviate the name to its first three letters.
@@ -132,6 +161,9 @@ export default function FixturesPage({ leagueId }) {
     queryFn: () => fetchFixtures(leagueId, dateStr),
     keepPreviousData: true,
   });
+
+  // Live scores overlay (polled every 30s). Only relevant when viewing today.
+  const liveMap = useLiveMap();
 
   // Moving to a new day repopulates which leagues are playing, so drop the
   // league filter to avoid a stale selection that hides everything.
@@ -327,6 +359,7 @@ export default function FixturesPage({ leagueId }) {
               league={league}
               season={season}
               highlight={filterMarket}
+              live={liveMap.get(fx.id)}
               showLeague
             />
           ))}
@@ -345,6 +378,7 @@ export default function FixturesPage({ leagueId }) {
                 league={g.league}
                 season={g.season}
                 highlight={filterMarket}
+                live={liveMap.get(fx.id)}
               />
             ))}
           </div>
@@ -354,7 +388,7 @@ export default function FixturesPage({ leagueId }) {
   );
 }
 
-function FixtureCard({ fixture, league, season, highlight, showLeague }) {
+function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
   const [open, setOpen] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showPlayers, setShowPlayers] = useState(false);
@@ -371,7 +405,9 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
   // "2026") — so we step back one year there.
   const isWorldCup = String(league?.id) === String(WORLD_CUP_ID);
   const propsSeason = isWorldCup ? Number(season) - 1 : Number(season);
-  const canShowPlayers = Number.isFinite(propsSeason) && !!fixture.id;
+  // Some leagues (e.g. club friendlies) opt out of player props — squads and
+  // minutes there are too unreliable to price.
+  const canShowPlayers = Number.isFinite(propsSeason) && !!fixture.id && !league?.noProps;
   // Corners apply to any match with both team ids (data coverage permitting).
   const canShowCorners = !!(fixture.id && fixture.homeTeam?.id && fixture.awayTeam?.id);
 
@@ -400,7 +436,14 @@ function FixtureCard({ fixture, league, season, highlight, showLeague }) {
           <span style={styles.aTeamName}>{fixture.homeTeam?.name || "TBD"}</span>
         </div>
         <div style={styles.aCenter}>
-          {fixture.homeScore != null && fixture.awayScore != null
+          {live
+            ? (
+              <span style={styles.aLiveWrap}>
+                <span style={styles.aScore}>{live.home ?? 0}–{live.away ?? 0}</span>
+                <span style={styles.aLiveTag}><span style={styles.aLiveDot} />{liveLabel(live)}</span>
+              </span>
+            )
+            : fixture.homeScore != null && fixture.awayScore != null
             ? <span style={styles.aScore}>{fixture.homeScore}–{fixture.awayScore}</span>
             : <span style={styles.aTime}>{kickoff}</span>}
           <span style={styles.chevron}>{open ? "▲" : "▼"}</span>
@@ -958,6 +1001,9 @@ const styles = {
   aCenter: { display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0, minWidth: 44 },
   aTime: { fontSize: 13, color: "var(--text3)", whiteSpace: "nowrap" },
   aScore: { fontSize: 17, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-display)" },
+  aLiveWrap: { display: "flex", flexDirection: "column", alignItems: "center", gap: 1 },
+  aLiveTag: { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "var(--loss)", textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" },
+  aLiveDot: { width: 6, height: 6, borderRadius: "50%", background: "var(--loss)", display: "inline-block" },
   chevron: { fontSize: 9, color: "var(--text3)", flexShrink: 0 },
   aPredWrap: { padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 8 },
   aBar: { display: "flex", height: 10, borderRadius: 5, overflow: "hidden", background: "var(--bg3)" },
