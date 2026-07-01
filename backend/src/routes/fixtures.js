@@ -334,7 +334,9 @@ function rowsFromStarters(starters, matchups = {}) {
       pos: p.pos,
       photo: p.photo,
       props: playerProps(p.stat, { foulMultiplier: m?.foulMultiplier }),
-      foulMatchup: m, // { foulMultiplier, opponent, opponentDribbles90 } or null
+      // Only the opponent name ships — the multiplier/dribbles metrics that
+      // reveal the model stay server-side.
+      foulMatchup: m ? { opponent: m.opponent } : null,
     };
   });
 }

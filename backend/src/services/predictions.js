@@ -201,7 +201,6 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
   // league's typical split, with home advantage already baked in.
   let lambdaHome = (hFor * aAga) / homeBase;
   let lambdaAway = (aFor * hAga) / awayBase;
-  let model = "form";
 
   // Blend in the Elo view when season ratings are supplied. Both models output
   // a (λhome, λaway) pair; we weight-average them so the final grid reflects
@@ -211,7 +210,6 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
     const w = BLEND_FORM_WEIGHT;
     lambdaHome = w * lambdaHome + (1 - w) * eloLambdas.lambdaHome;
     lambdaAway = w * lambdaAway + (1 - w) * eloLambdas.lambdaAway;
-    model = "blend";
   }
 
   lambdaHome = clamp(lambdaHome, 0.2, 4);
@@ -225,7 +223,6 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
   return {
     ...probs,
     confidence,
-    model,
     homeForm: homeStats.form.map((m) => m.outcome),
     awayForm: awayStats.form.map((m) => m.outcome),
     homeGoalsFor: +homeStats.goalsFor.toFixed(1),
@@ -255,7 +252,6 @@ export function blendPrediction(prediction, odds, marketWeight = 0.4) {
   const oddOf = (x) => (x && typeof x.odd === "number" ? x.odd : null);
   const w = marketWeight, mw = 1 - marketWeight;
   const out = { ...prediction, markets: { ...prediction.markets } };
-  let blended = false;
 
   // 1X2: de-vig the three-way price, then blend home/draw/away.
   const hw = oddOf(b.homeWin), dr = oddOf(b.draw), aw = oddOf(b.awayWin);
@@ -267,7 +263,6 @@ export function blendPrediction(prediction, odds, marketWeight = 0.4) {
     out.away = Math.round(mw * prediction.away + w * (pa / s) * 100);
     out.markets.win = Math.max(out.home, out.away);
     out.markets.winner = out.home >= out.away ? "home" : "away";
-    blended = true;
   }
 
   // Two-way markets: de-vig (yes vs no) and blend the model's % for that key.
@@ -277,7 +272,6 @@ export function blendPrediction(prediction, odds, marketWeight = 0.4) {
     if (typeof prediction.markets[key] !== "number") return;
     const py = 1 / yo, pn = 1 / no_;
     out.markets[key] = Math.round(mw * prediction.markets[key] + w * (py / (py + pn)) * 100);
-    blended = true;
   };
   blendTwo("over25", b.over25, b.under25);
   blendTwo("btts", b.bttsYes, b.bttsNo);
@@ -286,6 +280,5 @@ export function blendPrediction(prediction, odds, marketWeight = 0.4) {
   blendTwo("home2Plus", b.home2Plus, b.homeUnder2);
   blendTwo("away2Plus", b.away2Plus, b.awayUnder2);
 
-  if (blended) out.marketBlended = true;
   return out;
 }

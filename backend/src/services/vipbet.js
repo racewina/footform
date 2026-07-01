@@ -148,5 +148,6 @@ export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX) {
     }
   }
   builders.sort((a, b) => b.interest - a.interest);
-  return builders.slice(0, maxSlips);
+  // `interest` is only the internal ranking score — strip it from what ships.
+  return builders.slice(0, maxSlips).map(({ interest, ...slip }) => slip);
 }
