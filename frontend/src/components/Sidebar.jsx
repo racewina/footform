@@ -16,6 +16,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
   });
 
   const [leaguesOpen, setLeaguesOpen] = useState(false);
+  const [openCountry, setOpenCountry] = useState(null);
 
   // Some views are kept for local use only — hidden on the deployed site, shown
   // when running on localhost (the dev box). Keeps the public sidebar focused.
@@ -60,27 +61,48 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
             <div style={styles.leaguesList}>
               {isLoading && <p style={styles.muted}>Loading leagues…</p>}
               {isError && <p style={styles.error}>Couldn't load leagues</p>}
-              {Object.entries(byCountry).map(([country, items]) => (
-                <div key={country} style={styles.group}>
-                  <div style={styles.groupLabel}>{items[0].flag} {country}</div>
-                  {items.map((l) => {
-                    const active = String(l.id) === String(selectedId);
-                    return (
-                      <button
-                        key={l.id}
-                        style={{ ...styles.item, ...(active ? styles.itemActive : {}) }}
-                        onClick={() => {
-                          onSelect(String(l.id));
-                          onClose?.();
-                        }}
-                      >
-                        <span style={styles.itemName}>{l.name}</span>
-                        {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
+              {Object.entries(byCountry).map(([country, items]) => {
+                const open = openCountry === country;
+                const hasActive = items.some((l) => String(l.id) === String(selectedId));
+                return (
+                  <div key={country} style={styles.group}>
+                    <button
+                      style={{ ...styles.countryRow, ...(hasActive ? styles.countryRowActive : {}) }}
+                      onClick={() => setOpenCountry(open ? null : country)}
+                      aria-expanded={open}
+                    >
+                      <span style={styles.countryLeft}>
+                        <span style={styles.countryFlag}>{items[0].flag}</span>
+                        <span style={styles.itemName}>{country}</span>
+                      </span>
+                      <span style={styles.countryRight}>
+                        <span style={styles.countryCount}>{items.length}</span>
+                        <span style={{ ...styles.chevron, transform: open ? "rotate(90deg)" : "none" }}>›</span>
+                      </span>
+                    </button>
+                    {open && (
+                      <div style={styles.countryLeagues}>
+                        {items.map((l) => {
+                          const active = String(l.id) === String(selectedId);
+                          return (
+                            <button
+                              key={l.id}
+                              style={{ ...styles.subItem, ...(active ? styles.itemActive : {}) }}
+                              onClick={() => {
+                                onSelect(String(l.id));
+                                onClose?.();
+                              }}
+                            >
+                              <span style={styles.itemName}>{l.name}</span>
+                              {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -235,9 +257,24 @@ const styles = {
   todayIcon: { fontSize: 16 },
   toggleLeft: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
   chevron: { fontSize: 18, color: "var(--text3)", transition: "transform 0.15s ease", flexShrink: 0 },
-  leaguesList: { display: "flex", flexDirection: "column", gap: 14 },
+  leaguesList: { display: "flex", flexDirection: "column", gap: 4 },
   group: { display: "flex", flexDirection: "column", gap: 2 },
   groupLabel: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text3)", padding: "4px 10px" },
+  countryRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+    padding: "9px 10px", borderRadius: 8, color: "var(--text)", fontSize: 14, fontWeight: 500,
+    textAlign: "left", width: "100%",
+  },
+  countryRowActive: { background: "var(--bg3)" },
+  countryLeft: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
+  countryFlag: { fontSize: 15, flexShrink: 0 },
+  countryRight: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
+  countryCount: { fontSize: 11, fontWeight: 700, color: "var(--text3)", background: "var(--bg3)", borderRadius: 10, padding: "1px 7px", minWidth: 18, textAlign: "center" },
+  countryLeagues: { display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px", paddingLeft: 10, borderLeft: "1px solid var(--border)", marginLeft: 16 },
+  subItem: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "8px 10px", borderRadius: 8, color: "var(--text2)", fontSize: 13.5, textAlign: "left",
+  },
   item: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "8px 10px", borderRadius: 8, color: "var(--text2)", fontSize: 14, textAlign: "left",
