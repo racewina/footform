@@ -410,18 +410,25 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   // form-only prediction so one bad upstream never blanks the matchday.
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
   const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
-  // Bookmaker odds for the upcoming fixtures (fetched in parallel, cached per
-  // fixture). The market corrects the model's team-strength blind spots; odds
-  // only exist pre-kickoff, so finished matches stay pure-model.
+  // Per-fixture enrichment, gated to skip calls that add no value (cold-build
+  // cost control):
+  //   • odds — bookmakers don't price friendlies or the very lowest tiers, so a
+  //     call there just wastes a rate-gate slot. Skip noProps + tier ≥ 4.
+  //   • injuries — only meaningful/available for the top competitions, so limit
+  //     to the marquee leagues rather than fetching for every fixture everywhere.
+  const wantOdds = !league.noProps && (league.tier ?? 1) < 4;
+  const wantInjuries = MARQUEE_LEAGUES.has(String(leagueId));
   const oddsMap = {};
   const injMap = {};
   await Promise.all(
     fixtures
       .filter((f) => f.status !== "finished" && f.homeTeam.id && f.awayTeam.id)
-      .flatMap((f) => [
-        getFixtureOdds(f.id).then((o) => { oddsMap[f.id] = o; }).catch(() => {}),
-        getFixtureInjuries(f.id, f.homeTeam.id, f.awayTeam.id).then((i) => { injMap[f.id] = i; }).catch(() => {}),
-      ])
+      .flatMap((f) => {
+        const tasks = [];
+        if (wantOdds) tasks.push(getFixtureOdds(f.id).then((o) => { oddsMap[f.id] = o; }).catch(() => {}));
+        if (wantInjuries) tasks.push(getFixtureInjuries(f.id, f.homeTeam.id, f.awayTeam.id).then((i) => { injMap[f.id] = i; }).catch(() => {}));
+        return tasks;
+      })
   );
   for (const fx of fixtures) {
     if (!fx.homeTeam.id || !fx.awayTeam.id) {

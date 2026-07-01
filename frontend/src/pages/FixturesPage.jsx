@@ -130,6 +130,22 @@ const FILTERS = [
 const FILTER_BY_KEY = Object.fromEntries(FILTERS.map((f) => [f.key, f]));
 const FILTER_THRESHOLD = 50; // a "prediction type" filter keeps matches >= this %
 
+// Status segments for the "Live / Upcoming / Finished" filter on busy days.
+const STATUS_SEGMENTS = [
+  { key: "all", label: "All" },
+  { key: "live", label: "Live" },
+  { key: "upcoming", label: "Upcoming" },
+  { key: "finished", label: "Finished" },
+];
+
+// Gentle pulse for the live dot (state indication, not decoration for its own
+// sake); disabled under reduced-motion.
+const pulseCSS = `
+@keyframes ffPulse { 0%,100%{ opacity:1; transform:scale(1) } 50%{ opacity:.3; transform:scale(.7) } }
+.ff-live-dot { animation: ffPulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){ .ff-live-dot { animation: none } }
+`;
+
 // Color coding: green 70+, yellow-green 50-69, yellow 35-49, red below 35.
 function pctColor(p) {
   if (p >= 70) return "#2ecc71";
@@ -146,6 +162,7 @@ function tint(hex) {
 export default function FixturesPage({ leagueId }) {
   const [date, setDate] = useState(() => startOfToday());
   const [filterMarket, setFilterMarket] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all"); // all | live | upcoming | finished
   // Multi-select: an array of league ids. Empty = all leagues.
   const [leagueFilter, setLeagueFilter] = useState([]);
   const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
@@ -212,20 +229,41 @@ export default function FixturesPage({ leagueId }) {
         ? dayLeagues.find((l) => l.id === leagueFilter[0])?.name || "1 league"
         : `${leagueFilter.length} leagues`;
 
+  // A fixture's live status. The 30s live poll is more current than the
+  // edge-cached feed, so a match counts as live if it's in the live map even
+  // when the cached status still says upcoming.
+  const statusOf = (fx) =>
+    liveMap.has(fx.id) || fx.status === "inprogress"
+      ? "live"
+      : fx.status === "finished"
+      ? "finished"
+      : "upcoming";
+
+  // Fixtures the status filter applies to (post prediction + league filter), for
+  // both the counts on the segmented control and the actual filtering.
+  const statusBase = (isTodayView
+    ? groups.flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
+    : groups.flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
+  ).filter((x) => !isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id)));
+
+  const statusCounts = {
+    all: statusBase.length,
+    live: statusBase.filter((x) => statusOf(x.fx) === "live").length,
+    upcoming: statusBase.filter((x) => statusOf(x.fx) === "upcoming").length,
+    finished: statusBase.filter((x) => statusOf(x.fx) === "finished").length,
+  };
+  // If the chosen bucket empties out (e.g. the last live match ends), fall back
+  // to All so the view is never mysteriously blank.
+  const effStatus = statusFilter !== "all" && statusCounts[statusFilter] === 0 ? "all" : statusFilter;
+
   // The cross-league "today" view reads best as one time-ordered list rather
   // than league-by-league. Flatten every group into a single stream, carrying
   // each fixture's league/season so the card can still show its competition.
   // Default sort is by kickoff; with a prediction filter active we keep the
-  // strongest-first ranking that filter implies. The optional league filter
-  // narrows the stream to one competition.
+  // strongest-first ranking that filter implies.
   const flatToday = isTodayView
     ? (() => {
-        let flat = groups.flatMap((g) =>
-          g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season }))
-        );
-        if (leagueFilter.length) {
-          flat = flat.filter((x) => leagueFilter.includes(String(x.league.id)));
-        }
+        let flat = statusBase.filter((x) => effStatus === "all" || statusOf(x.fx) === effStatus);
         if (filterMarket === "all") {
           flat.sort((a, b) => (a.fx.startTimestamp ?? Infinity) - (b.fx.startTimestamp ?? Infinity));
         } else {
@@ -236,8 +274,20 @@ export default function FixturesPage({ leagueId }) {
       })()
     : null;
 
+  // Single-league view: apply the status filter within each league group.
+  const displayGroups = isTodayView
+    ? groups
+    : groups
+        .map((g) => ({
+          ...g,
+          fixtures: effStatus === "all" ? g.fixtures : g.fixtures.filter((fx) => statusOf(fx) === effStatus),
+        }))
+        .filter((g) => g.fixtures.length > 0);
+
   // Visible count after all filters (drives the empty state for the today view).
-  const visibleCount = isTodayView ? flatToday.length : totalFixtures;
+  const visibleCount = isTodayView
+    ? flatToday.length
+    : displayGroups.reduce((n, g) => n + g.fixtures.length, 0);
 
   const prettyDate = date.toLocaleDateString(undefined, {
     weekday: "short", month: "short", day: "numeric",
@@ -245,6 +295,7 @@ export default function FixturesPage({ leagueId }) {
 
   return (
     <div style={styles.page}>
+      <style>{pulseCSS}</style>
       <div style={styles.dateBar}>
         <button style={styles.navBtn} onClick={() => shift(-1)} aria-label="Previous day">
           ‹
@@ -274,6 +325,37 @@ export default function FixturesPage({ leagueId }) {
         </button>
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
       </div>
+
+      {!isLoading && !isError && statusCounts.all > 0 && (
+        <div style={styles.statusBar}>
+          <div style={styles.segGroup} role="tablist" aria-label="Filter by match status">
+            {STATUS_SEGMENTS.map((s) => {
+              const count = statusCounts[s.key];
+              const disabled = s.key !== "all" && count === 0;
+              const active = effStatus === s.key;
+              const isLive = s.key === "live";
+              return (
+                <button
+                  key={s.key}
+                  role="tab"
+                  aria-selected={active}
+                  disabled={disabled}
+                  onClick={() => setStatusFilter(s.key)}
+                  style={{
+                    ...styles.segBtn,
+                    ...(active ? (isLive ? styles.segBtnLiveActive : styles.segBtnActive) : {}),
+                    ...(disabled ? styles.segBtnDisabled : {}),
+                  }}
+                >
+                  {isLive && count > 0 && <span className="ff-live-dot" style={styles.segDot} />}
+                  <span>{s.label}</span>
+                  <span style={styles.segCount}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={styles.filterBar}>
         <span style={styles.filterLabel}>Prediction</span>
@@ -364,7 +446,7 @@ export default function FixturesPage({ leagueId }) {
             />
           ))}
 
-        {!isLoading && !isError && !isTodayView && groups.map((g) => (
+        {!isLoading && !isError && !isTodayView && displayGroups.map((g) => (
           <div key={g.league.id} style={styles.leagueGroup}>
             <div style={styles.groupHeader}>
               <span style={{ fontSize: 16 }}>{g.league.flag}</span>
@@ -970,6 +1052,14 @@ const styles = {
   dateLabelIcon: { fontSize: 13, opacity: 0.8 },
   dateInput: { position: "absolute", left: "50%", bottom: 0, width: 1, height: 1, opacity: 0, border: "none", padding: 0, pointerEvents: "none" },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
+  statusBar: { display: "flex", padding: "12px 24px 0" },
+  segGroup: { display: "inline-flex", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, padding: 3, gap: 2, maxWidth: "100%", overflowX: "auto" },
+  segBtn: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", borderRadius: 7, fontSize: 13, fontWeight: 600, color: "var(--text3)", background: "transparent", transition: "background 150ms ease, color 150ms ease", whiteSpace: "nowrap", cursor: "pointer" },
+  segBtnActive: { background: "var(--bg3)", color: "var(--text)" },
+  segBtnLiveActive: { background: "rgba(231,76,60,0.15)", color: "var(--loss)" },
+  segBtnDisabled: { opacity: 0.35, cursor: "default" },
+  segCount: { fontSize: 11, fontWeight: 700, opacity: 0.6 },
+  segDot: { width: 7, height: 7, borderRadius: "50%", background: "var(--loss)", flexShrink: 0 },
   filterBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
   filterLabel: { fontSize: 12, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 2 },
   filterChip: { fontSize: 13, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px" },
