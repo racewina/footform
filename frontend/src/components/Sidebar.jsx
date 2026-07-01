@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { FootformLogo } from "./FootformLogo";
 
 async function fetchLeagues() {
   const res = await fetch("/api/leagues");
@@ -39,8 +40,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
           aria-label="FootForm home"
           title="Back to today's matches"
         >
-          <span style={styles.brandMark}>⚽</span>
-          <span style={styles.brandName}>FootForm</span>
+          <FootformLogo iconSize={34} wordSize={19} uid="sidebar" />
         </button>
 
         <nav style={styles.nav}>
