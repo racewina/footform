@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Analytics } from "@vercel/analytics/react";
 import Sidebar from "./components/Sidebar";
@@ -23,20 +23,38 @@ const spinnerCSS = `
 export default function App() {
   const [selectedLeague, setSelectedLeague] = useState("today");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // Lightweight in-app navigation history so a mobile/PWA back button can return
-  // to the previous view without opening the sidebar.
+  // In-app navigation history wired into the browser History API so the Android
+  // hardware/gesture back (and the in-app back button) step through views instead
+  // of closing the PWA. A ref mirrors the stack so the popstate listener — bound
+  // once — always reads the latest value.
   const [navStack, setNavStack] = useState([]);
+  const navStackRef = useRef(navStack);
+  navStackRef.current = navStack;
 
   const navigate = (id) => {
     if (String(id) === String(selectedLeague)) return;
     setNavStack((s) => [...s, selectedLeague]);
     setSelectedLeague(id);
+    // One browser history entry per forward navigation (same URL, no reload) so
+    // a system/gesture back pops it and fires popstate.
+    window.history.pushState({ ff: true }, "");
   };
+  // Both the system back and our button flow through popstate, so there's a
+  // single source of truth and no divergence.
   const goBack = () => {
-    if (!navStack.length) return;
-    setSelectedLeague(navStack[navStack.length - 1]);
-    setNavStack((s) => s.slice(0, -1));
+    if (navStack.length) window.history.back();
   };
+
+  useEffect(() => {
+    const onPop = () => {
+      const stack = navStackRef.current;
+      if (!stack.length) return; // at the root — let the browser exit the app
+      setSelectedLeague(stack[stack.length - 1]);
+      setNavStack(stack.slice(0, -1));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
