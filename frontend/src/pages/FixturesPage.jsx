@@ -130,6 +130,14 @@ const FILTERS = [
 const FILTER_BY_KEY = Object.fromEntries(FILTERS.map((f) => [f.key, f]));
 const FILTER_THRESHOLD = 50; // a "prediction type" filter keeps matches >= this %
 
+// "Starting within" windows for today's slate (hours; "all" = no time filter).
+const WINDOWS = [
+  { key: "all", label: "All day" },
+  { key: "3", label: "Next 3h" },
+  { key: "6", label: "Next 6h" },
+  { key: "12", label: "Next 12h" },
+];
+
 // Status segments for the "Live / Upcoming / Finished" filter on busy days.
 const STATUS_SEGMENTS = [
   { key: "all", label: "All" },
@@ -163,6 +171,7 @@ export default function FixturesPage({ leagueId }) {
   const [date, setDate] = useState(() => startOfToday());
   const [filterMarket, setFilterMarket] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all"); // all | live | upcoming | finished
+  const [withinFilter, setWithinFilter] = useState("all"); // all | 3 | 6 | 12 (hours, today only)
   // Multi-select: an array of league ids. Empty = all leagues.
   const [leagueFilter, setLeagueFilter] = useState([]);
   const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
@@ -232,19 +241,37 @@ export default function FixturesPage({ leagueId }) {
   // A fixture's live status. The 30s live poll is more current than the
   // edge-cached feed, so a match counts as live if it's in the live map even
   // when the cached status still says upcoming.
-  const statusOf = (fx) =>
-    liveMap.has(fx.id) || fx.status === "inprogress"
-      ? "live"
-      : fx.status === "finished"
-      ? "finished"
-      : "upcoming";
+  // Classify by KICKOFF TIME, not just the feed's status field: the /today feed
+  // is edge-cached (up to ~24h), so a match that has already kicked off and even
+  // finished can still say "notstarted". Live is authoritative from the 30s live
+  // poll; anything whose kickoff is still in the future is upcoming; anything past
+  // kickoff that isn't live is treated as finished (never left in "upcoming").
+  const statusOf = (fx) => {
+    if (liveMap.has(fx.id) || fx.status === "inprogress") return "live";
+    const ts = fx.startTimestamp ? fx.startTimestamp * 1000 : 0;
+    if (ts) return ts > Date.now() ? "upcoming" : "finished";
+    return fx.status === "finished" ? "finished" : "upcoming";
+  };
 
-  // Fixtures the status filter applies to (post prediction + league filter), for
-  // both the counts on the segmented control and the actual filtering.
-  const statusBase = (isTodayView
-    ? groups.flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
-    : groups.flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
-  ).filter((x) => !isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id)));
+  // Optional "starting within" window (today only) — keep matches kicking off
+  // within the horizon, mirroring the Props Finder filter, to streamline a busy
+  // slate down to the imminent games.
+  const withinCutoff =
+    isToday && withinFilter !== "all" ? Date.now() + Number(withinFilter) * 3600 * 1000 : Infinity;
+  // A finite window streamlines to what's still to come: keep live + matches
+  // kicking off within the horizon, drop already-finished ones. "All day" keeps
+  // everything.
+  const passWithin = (fx) => {
+    if (withinCutoff === Infinity) return true;
+    if (statusOf(fx) === "finished") return false;
+    return !fx.startTimestamp || fx.startTimestamp * 1000 <= withinCutoff;
+  };
+
+  // Fixtures the status filter applies to (post prediction + league + time filter),
+  // for both the counts on the segmented control and the actual filtering.
+  const statusBase = groups
+    .flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
+    .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id))) && passWithin(x.fx));
 
   const statusCounts = {
     all: statusBase.length,
@@ -280,7 +307,7 @@ export default function FixturesPage({ leagueId }) {
     : groups
         .map((g) => ({
           ...g,
-          fixtures: effStatus === "all" ? g.fixtures : g.fixtures.filter((fx) => statusOf(fx) === effStatus),
+          fixtures: g.fixtures.filter((fx) => (effStatus === "all" || statusOf(fx) === effStatus) && passWithin(fx)),
         }))
         .filter((g) => g.fixtures.length > 0);
 
@@ -319,7 +346,7 @@ export default function FixturesPage({ leagueId }) {
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
       </div>
 
-      {!isLoading && !isError && statusCounts.all > 0 && (
+      {!isLoading && !isError && totalFixtures > 0 && (
         <div style={styles.statusBar}>
           <div style={styles.segGroup} role="tablist" aria-label="Filter by match status">
             {STATUS_SEGMENTS.map((s) => {
@@ -347,6 +374,14 @@ export default function FixturesPage({ leagueId }) {
               );
             })}
           </div>
+          {isToday && (
+            <label style={styles.withinField}>
+              <span style={styles.withinLabel}>Within</span>
+              <select style={styles.withinSelect} value={withinFilter} onChange={(e) => setWithinFilter(e.target.value)}>
+                {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
+              </select>
+            </label>
+          )}
         </div>
       )}
 
@@ -1044,7 +1079,10 @@ const styles = {
   dateLabelIcon: { fontSize: 13, opacity: 0.8 },
   dateInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", WebkitAppearance: "none", appearance: "none" },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
-  statusBar: { display: "flex", padding: "12px 24px 0" },
+  statusBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 24px 0", flexWrap: "wrap" },
+  withinField: { display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 },
+  withinLabel: { fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 },
+  withinSelect: { background: "var(--bg2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", fontSize: 13 },
   segGroup: { display: "inline-flex", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, padding: 3, gap: 2, maxWidth: "100%", overflowX: "auto" },
   segBtn: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 13px", borderRadius: 7, fontSize: 13, fontWeight: 600, color: "var(--text3)", background: "transparent", transition: "background 150ms ease, color 150ms ease", whiteSpace: "nowrap", cursor: "pointer" },
   segBtnActive: { background: "var(--bg3)", color: "var(--text)" },
