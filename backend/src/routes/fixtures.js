@@ -381,9 +381,18 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   const data = await fetchScheduledEvents(leagueId, season.id);
   const allEvents = data?.events || [];
 
+  const isTodayTarget = targetDate === formatDate(new Date(), tz);
+  const LIVE_LOOKBACK_MS = 4 * 3600 * 1000; // ~a match's length + stoppage/ET
   const dayEvents = allEvents.filter((e) => {
     if (!e.startTimestamp) return false;
-    return formatDate(new Date(e.startTimestamp * 1000), tz) === targetDate;
+    if (formatDate(new Date(e.startTimestamp * 1000), tz) === targetDate) return true;
+    // A late game that kicked off shortly before this day may still be in play
+    // (running past midnight). Its kickoff date is "yesterday", so it would
+    // otherwise vanish from today's slate. Keep recently-started, not-finished
+    // matches when viewing the current day; the frontend classifies them live.
+    if (!isTodayTarget) return false;
+    const age = Date.now() - e.startTimestamp * 1000;
+    return age > 0 && age < LIVE_LOOKBACK_MS && e.status?.type !== "finished";
   });
 
   const fixtures = dayEvents.map((e) => ({
