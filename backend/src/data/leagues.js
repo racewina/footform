@@ -33,10 +33,10 @@ export const LEAGUES = [
   { id: "3", name: "Europa League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "848", name: "Conference League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "1", name: "World Cup", country: "International", tier: 1, flag: "🌍" },
-  { id: "10", name: "International Friendlies", country: "International", tier: 1, flag: "🤝" },
+  { id: "10", name: "International Friendlies", country: "International", tier: 1, flag: "🤝", friendly: true },
   // Club friendlies (pre-season). Predictions + corners only — noProps disables
   // the player-props section, since squads/minutes in friendlies are unreliable.
-  { id: "667", name: "Club Friendlies", country: "International", tier: 1, flag: "🤝", noProps: true },
+  { id: "667", name: "Club Friendlies", country: "International", tier: 1, flag: "🤝", noProps: true, friendly: true },
 ];
 
 export const LEAGUES_BY_ID = Object.fromEntries(

@@ -142,6 +142,7 @@ export const MARQUEE_LEAGUES = new Set([
 export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX) {
   const builders = [];
   for (const g of leagues || []) {
+    if (g.league?.friendly) continue; // friendlies are too unpredictable for VIP slips
     for (const fx of g.fixtures || []) {
       const b = matchBuilder(fx, g, cornerMap[fx.id] || null);
       if (b) builders.push(b);

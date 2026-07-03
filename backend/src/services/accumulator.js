@@ -40,6 +40,7 @@ function fixtureCandidates(fx) {
 export function buildLegPool(leagues) {
   const pool = [];
   for (const g of leagues || []) {
+    if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
     for (const fx of g.fixtures || []) {
       const cands = fixtureCandidates(fx);
       if (!cands.length) continue;
