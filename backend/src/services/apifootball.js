@@ -441,3 +441,18 @@ export async function fetchLiveFixtures() {
     }))
     .filter((x) => x.id);
 }
+
+// Every fixture across ALL leagues on a given UTC calendar date in ONE call
+// (/fixtures?date=YYYY-MM-DD). Used to count matches per league for a day without
+// fanning out per-league. Returns just id, leagueId and kickoff timestamp.
+export async function fetchFixturesByDate(date) {
+  const json = await request(`/fixtures?date=${date}`);
+  const list = Array.isArray(json?.response) ? json.response : [];
+  return list
+    .map((fx) => ({
+      id: fx.fixture?.id,
+      leagueId: fx.league?.id,
+      startTimestamp: fx.fixture?.timestamp ?? null,
+    }))
+    .filter((x) => x.id && x.leagueId);
+}

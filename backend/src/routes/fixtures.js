@@ -13,6 +13,7 @@ import {
   fetchFixtureOdds,
   fetchFixtureInjuries,
   fetchLiveFixtures,
+  fetchFixturesByDate,
 } from "../services/apifootball.js";
 import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines } from "../services/predictions.js";
 import { playerProps } from "../services/players.js";
@@ -51,6 +52,44 @@ router.get("/live", async (req, res) => {
     res.json({ live, count: live.length, fromCache: false });
   } catch (err) {
     console.error(`[live] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-league match counts for a date, so the sidebar can show how many games
+// each league (and country) has that day. One upstream /fixtures?date call per
+// UTC day; we pull the target day plus its neighbours so tz-shifted kickoffs are
+// counted under the right local date. Only our covered leagues are counted.
+router.get("/counts", async (req, res) => {
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+
+  const cacheKey = `counts:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  const shiftYmd = (ymd, days) => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+
+  try {
+    const utcDates = [shiftYmd(targetDate, -1), targetDate, shiftYmd(targetDate, 1)];
+    const lists = await Promise.all(utcDates.map((d) => fetchFixturesByDate(d).catch(() => [])));
+    const counts = {};
+    for (const fx of lists.flat()) {
+      const id = String(fx.leagueId);
+      if (!LEAGUES_BY_ID[id] || !fx.startTimestamp) continue;
+      if (formatDate(new Date(fx.startTimestamp * 1000), tz) !== targetDate) continue;
+      counts[id] = (counts[id] || 0) + 1;
+    }
+    const result = { date: targetDate, counts };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[counts] ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

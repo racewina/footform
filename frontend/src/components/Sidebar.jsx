@@ -2,9 +2,17 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FootformLogo } from "./FootformLogo";
 
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 async function fetchLeagues() {
   const res = await fetch("/api/leagues");
   if (!res.ok) throw new Error("Failed to load leagues");
+  return res.json();
+}
+
+async function fetchCounts() {
+  const res = await fetch(`/api/counts?tz=${encodeURIComponent(TZ)}`);
+  if (!res.ok) throw new Error("Failed to load counts");
   return res.json();
 }
 
@@ -14,6 +22,17 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
     queryFn: fetchLeagues,
     staleTime: 24 * 60 * 60 * 1000,
   });
+
+  // Today's match counts per league, for the country/league badges.
+  const { data: countsData } = useQuery({
+    queryKey: ["counts"],
+    queryFn: fetchCounts,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const counts = countsData?.counts || {};
+  const countFor = (id) => counts[String(id)] || 0;
+  const countryTotal = (items) => items.reduce((n, l) => n + countFor(l.id), 0);
 
   const [leaguesOpen, setLeaguesOpen] = useState(false);
   const [openCountry, setOpenCountry] = useState(null);
@@ -76,7 +95,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
                         <span style={styles.itemName}>{country}</span>
                       </span>
                       <span style={styles.countryRight}>
-                        <span style={styles.countryCount}>{items.length}</span>
+                        {countryTotal(items) > 0 && <span style={styles.countMatch} title="Matches today">{countryTotal(items)}</span>}
                         <span style={{ ...styles.chevron, transform: open ? "rotate(90deg)" : "none" }}>›</span>
                       </span>
                     </button>
@@ -94,7 +113,10 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
                               }}
                             >
                               <span style={styles.itemName}>{l.name}</span>
-                              {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
+                              <span style={styles.subRight}>
+                                {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
+                                {countFor(l.id) > 0 && <span style={styles.countMatch} title="Matches today">{countFor(l.id)}</span>}
+                              </span>
                             </button>
                           );
                         })}
@@ -270,6 +292,8 @@ const styles = {
   countryFlag: { fontSize: 15, flexShrink: 0 },
   countryRight: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
   countryCount: { fontSize: 11, fontWeight: 700, color: "var(--text3)", background: "var(--bg3)", borderRadius: 10, padding: "1px 7px", minWidth: 18, textAlign: "center" },
+  countMatch: { fontSize: 11, fontWeight: 700, color: "#04121f", background: "var(--accent)", borderRadius: 10, padding: "1px 7px", minWidth: 18, textAlign: "center" },
+  subRight: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 },
   countryLeagues: { display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px", paddingLeft: 10, borderLeft: "1px solid var(--border)", marginLeft: 16 },
   subItem: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
