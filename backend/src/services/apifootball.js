@@ -453,6 +453,9 @@ export async function fetchFixturesByDate(date) {
       id: fx.fixture?.id,
       leagueId: fx.league?.id,
       startTimestamp: fx.fixture?.timestamp ?? null,
+      status: mapStatus(fx.fixture?.status?.short),
+      home: fx.teams?.home?.name ?? null,
+      away: fx.teams?.away?.name ?? null,
     }))
     .filter((x) => x.id && x.leagueId);
 }

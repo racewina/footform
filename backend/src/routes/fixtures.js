@@ -1372,88 +1372,93 @@ router.get("/props-finder", async (req, res) => {
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
 
-  try {
-    const groups = await Promise.all(
-      LEAGUES.map((l) =>
-        buildLeagueDay(l.id, targetDate, tz).catch((e) => {
-          console.error(`[props-finder] ${l.id}: ${e.message}`);
-          return null;
-        })
-      )
-    );
-    // Leagues that opt out of player props (e.g. club friendlies) never appear
-    // in the Props Finder — not in the selectors, not in the fan-out.
-    const leagues = groups.filter((g) => g && g.fixtures && g.fixtures.length && !g.league.noProps);
+  const shiftYmd = (ymd, days) => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
 
-    // Full list of today's upcoming matches and leagues (cheap — no props build),
-    // so the UI can populate the match + league selectors with every fixture,
-    // including ones outside the current time window.
-    const matches = [];
-    const leagueMap = new Map();
-    for (const g of leagues) {
-      let leagueHasUpcoming = false;
-      for (const fx of g.fixtures) {
-        if (!fx.id || fx.status === "finished") continue;
-        leagueHasUpcoming = true;
-        matches.push({
-          id: fx.id,
-          home: fx.homeTeam?.name,
-          away: fx.awayTeam?.name,
-          league: g.league.name,
-          leagueId: g.league.id,
-          leagueFlag: g.league.flag,
-          kickoff: fx.startTimestamp,
-        });
-      }
-      if (leagueHasUpcoming && !leagueMap.has(g.league.id)) {
-        leagueMap.set(g.league.id, { id: g.league.id, name: g.league.name, flag: g.league.flag });
-      }
+  try {
+    // Today's fixtures across every league in ONE upstream call (+ the neighbour
+    // UTC dates so tz day-boundaries are correct) — the same cheap source /counts
+    // uses. This replaces a per-league buildLeagueDay fan-out that rate-limited on
+    // cold Props Finder invocations and returned empty selectors.
+    const utcDates = [shiftYmd(targetDate, -1), targetDate, shiftYmd(targetDate, 1)];
+    const dayFixtures = (await Promise.all(utcDates.map((d) => fetchFixturesByDate(d).catch(() => [])))).flat();
+
+    // Upcoming fixtures today, in leagues that price player props (friendlies opt
+    // out via noProps).
+    const upcoming = [];
+    for (const fx of dayFixtures) {
+      const lg = LEAGUES_BY_ID[String(fx.leagueId)];
+      if (!lg || lg.noProps || !fx.startTimestamp || fx.status === "finished") continue;
+      if (formatDate(new Date(fx.startTimestamp * 1000), tz) !== targetDate) continue;
+      upcoming.push({ ...fx, league: lg });
     }
-    matches.sort((a, b) => (a.kickoff ?? 0) - (b.kickoff ?? 0));
+
+    // Selector lists (leagues + matches) for the UI.
+    const matches = upcoming
+      .map((fx) => ({
+        id: fx.id, home: fx.home, away: fx.away,
+        league: fx.league.name, leagueId: fx.league.id, leagueFlag: fx.league.flag,
+        kickoff: fx.startTimestamp,
+      }))
+      .sort((a, b) => (a.kickoff ?? 0) - (b.kickoff ?? 0));
+    const leagueMap = new Map();
+    for (const fx of upcoming) {
+      if (!leagueMap.has(fx.league.id)) leagueMap.set(fx.league.id, { id: fx.league.id, name: fx.league.name, flag: fx.league.flag });
+    }
     const leagueList = [...leagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
-    // No league or match chosen yet → return only the selector lists, skipping
-    // the expensive per-fixture player-props fan-out. Players load once the user
-    // narrows to a league or a single match.
+    // No league or match chosen yet → return only the selector lists. Players load
+    // once the user narrows to a league or a single match.
     if (!leagueId && !matchId) {
       const result = { date: targetDate, within: within || null, match: null, league: null, count: 0, matches, leagues: leagueList, players: [] };
       cacheSet(cacheKey, result, TTL.FIXTURES);
       return res.json({ ...result, fromCache: false });
     }
 
+    // Build props only for the chosen league/match — a small, bounded fan-out.
+    const target = upcoming.filter(
+      (fx) =>
+        (!leagueId || String(fx.league.id) === leagueId) &&
+        (!matchId || String(fx.id) === matchId) &&
+        !(fx.startTimestamp && fx.startTimestamp > cutoff)
+    );
+    const seasonYearOf = {}; // leagueId -> current season year (cached per request)
     const players = [];
-    for (const g of leagues) {
-      if (leagueId && String(g.league.id) !== leagueId) continue;
-      const isWC = String(g.league.id) === "1";
-      const propsSeason = isWC ? Number(g.season) - 1 : Number(g.season);
-      if (!Number.isFinite(propsSeason)) continue;
-      for (const fx of g.fixtures) {
-        if (!fx.id || fx.status === "finished") continue;
-        if (matchId && String(fx.id) !== matchId) continue;
-        if (fx.startTimestamp && fx.startTimestamp > cutoff) continue;
-        const pp = await getFixturePlayerProps(fx.id, propsSeason).catch(() => null);
-        if (!pp || !pp.available) continue;
-        for (const side of [pp.home, pp.away]) {
-          if (!side) continue;
-          for (const pl of side.players) {
-            if (!pl.props?.tiers) continue;
-            players.push({
-              id: pl.id,
-              name: pl.name,
-              photo: pl.photo,
-              pos: pl.pos,
-              team: side.teamName,
-              teamId: side.teamId,
-              league: g.league.name,
-              leagueFlag: g.league.flag,
-              matchId: fx.id,
-              home: fx.homeTeam?.name,
-              away: fx.awayTeam?.name,
-              kickoff: fx.startTimestamp,
-              tiers: pl.props.tiers,
-              foulMatchup: pl.foulMatchup || null,
-            });
-          }
+    for (const fx of target) {
+      const lid = String(fx.league.id);
+      if (seasonYearOf[lid] === undefined) {
+        const s = await getCurrentSeason(fx.league.id).catch(() => null);
+        seasonYearOf[lid] = s ? Number(s.id) : null;
+      }
+      const year = seasonYearOf[lid];
+      if (!Number.isFinite(year)) continue;
+      const propsSeason = lid === "1" ? year - 1 : year; // WC props use the club season
+      const pp = await getFixturePlayerProps(fx.id, propsSeason).catch(() => null);
+      if (!pp || !pp.available) continue;
+      for (const side of [pp.home, pp.away]) {
+        if (!side) continue;
+        for (const pl of side.players) {
+          if (!pl.props?.tiers) continue;
+          players.push({
+            id: pl.id,
+            name: pl.name,
+            photo: pl.photo,
+            pos: pl.pos,
+            team: side.teamName,
+            teamId: side.teamId,
+            league: fx.league.name,
+            leagueFlag: fx.league.flag,
+            matchId: fx.id,
+            home: fx.home,
+            away: fx.away,
+            kickoff: fx.startTimestamp,
+            tiers: pl.props.tiers,
+            foulMatchup: pl.foulMatchup || null,
+          });
         }
       }
     }
