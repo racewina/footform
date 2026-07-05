@@ -574,27 +574,46 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
 
       {p?.markets && (() => {
         const favSide = (p.home ?? 0) >= (p.away ?? 0) ? "home" : "away";
+        // Colour by likelihood, not by home/away: the more-likely side is green,
+        // the other red, the draw amber — so the favourite always reads green.
+        const favColor = (side) => (favSide === side ? "var(--win)" : "var(--loss)");
         const winnerHit = fixture.grade?.grades?.winner?.hit;
         const tick = (h) => h == null ? null : <span style={{ color: h ? "var(--win)" : "var(--loss)", marginLeft: 3 }}>{h ? "✓" : "✗"}</span>;
         return (
           <div style={styles.aPredWrap}>
             <div style={styles.aBar}>
-              <div style={{ flexGrow: p.home || 0, background: "var(--win)" }} title={`Home win ${p.home}%`} />
+              <div style={{ flexGrow: p.home || 0, background: favColor("home") }} title={`Home win ${p.home}%`} />
               <div style={{ flexGrow: p.draw || 0, background: "var(--draw)" }} title={`Draw ${p.draw}%`} />
-              <div style={{ flexGrow: p.away || 0, background: "var(--loss)" }} title={`Away win ${p.away}%`} />
+              <div style={{ flexGrow: p.away || 0, background: favColor("away") }} title={`Away win ${p.away}%`} />
             </div>
             <div style={styles.aBarLabels}>
               <span style={{ ...styles.aBarLabel, ...(highlight === "win" && favSide === "home" ? styles.aBarLabelHi : {}) }}>
-                {teamCode(fixture.homeTeam)} <b style={{ color: "var(--win)" }}>{p.home}%</b>{favSide === "home" && tick(winnerHit)}
+                {teamCode(fixture.homeTeam)} <b style={{ color: favColor("home") }}>{p.home}%</b>{favSide === "home" && tick(winnerHit)}
               </span>
               <span style={{ ...styles.aBarLabel, justifyContent: "center" }}>Draw <b style={{ color: "var(--text2)" }}>{p.draw}%</b></span>
               <span style={{ ...styles.aBarLabel, justifyContent: "flex-end", ...(highlight === "win" && favSide === "away" ? styles.aBarLabelHi : {}) }}>
-                {teamCode(fixture.awayTeam)} <b style={{ color: "var(--loss)" }}>{p.away}%</b>{favSide === "away" && tick(winnerHit)}
+                {teamCode(fixture.awayTeam)} <b style={{ color: favColor("away") }}>{p.away}%</b>{favSide === "away" && tick(winnerHit)}
               </span>
             </div>
             <div style={styles.aChips}>
-              <AChip label="Over 2.5" val={p.markets.over25} hit={fixture.grade?.grades?.over25?.hit} active={highlight === "over25"} />
-              <AChip label="Both score" val={p.markets.btts} hit={fixture.grade?.grades?.btts?.hit} active={highlight === "btts"} />
+              {highlight === "onePlus" || highlight === "twoPlus" ? (() => {
+                // Selecting a team-goals market surfaces each side's scoring
+                // probability right on the card, so the model's strength read is
+                // visible without expanding (a strong scorer reads far higher).
+                const two = highlight === "twoPlus";
+                const suf = two ? "2+ goals" : "1+ goal";
+                return (
+                  <>
+                    <AChip label={`${teamCode(fixture.homeTeam)} ${suf}`} val={two ? p.markets.home2Plus : p.markets.home1Plus} active />
+                    <AChip label={`${teamCode(fixture.awayTeam)} ${suf}`} val={two ? p.markets.away2Plus : p.markets.away1Plus} active />
+                  </>
+                );
+              })() : (
+                <>
+                  <AChip label="Over 2.5" val={p.markets.over25} hit={fixture.grade?.grades?.over25?.hit} active={highlight === "over25"} />
+                  <AChip label="Both score" val={p.markets.btts} hit={fixture.grade?.grades?.btts?.hit} active={highlight === "btts"} />
+                </>
+              )}
               <AChip label="Exp. goals" raw={p.markets.expectedGoals} />
             </div>
           </div>
@@ -1008,12 +1027,14 @@ function GoalStat({ label, val = 0, active }) {
 }
 
 function PredictionDetail({ prediction: p, fixture }) {
+  // Green = the more-likely side, red = the other, amber = draw.
+  const favColor = (side) => ((p.home ?? 0) >= (p.away ?? 0) ? "home" : "away") === side ? "var(--win)" : "var(--loss)";
   return (
     <div style={styles.predBody}>
       <div style={styles.probBar}>
-        <div style={{ ...styles.probSeg, width: `${p.home}%`, background: "var(--win)" }} title={`Home ${p.home}%`} />
+        <div style={{ ...styles.probSeg, width: `${p.home}%`, background: favColor("home") }} title={`Home ${p.home}%`} />
         <div style={{ ...styles.probSeg, width: `${p.draw}%`, background: "var(--draw)" }} title={`Draw ${p.draw}%`} />
-        <div style={{ ...styles.probSeg, width: `${p.away}%`, background: "var(--loss)" }} title={`Away ${p.away}%`} />
+        <div style={{ ...styles.probSeg, width: `${p.away}%`, background: favColor("away") }} title={`Away ${p.away}%`} />
       </div>
       <div style={styles.probLabels}>
         <span>Home {p.home}%</span>
