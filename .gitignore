@@ -4,3 +4,10 @@ dist/
 .DS_Store
 *.log
 .vercel
+
+# Private build spec / master prompt — never commit (keeps the method off GitHub)
+*master-prompt*
+*build-prompt*
+*.spec.txt
+SPEC.md
+PROMPT.md
