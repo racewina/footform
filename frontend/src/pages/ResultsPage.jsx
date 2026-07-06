@@ -341,11 +341,18 @@ function ResultCard({ match: m }) {
           {MARKETS.map((mk) => {
             const cell = g[mk.key];
             if (!cell) return null;
+            // Show the side the model actually backed, so the % and the ✓ agree.
+            // For a Yes/No market the model backs "No" when its % is below 50 —
+            // display that as "No <market>" with the complementary confidence
+            // (e.g. BTTS 37% → the model backed "No BTTS" at 63%).
+            const backedNo = mk.key !== "winner" && cell.call === "No";
+            const label = backedNo ? `No ${mk.label}` : mk.label;
+            const pct = backedNo ? 100 - cell.pct : cell.pct;
             return (
               <div key={mk.key} style={styles.gradeCell}>
-                <span style={styles.gradeLabel}>{mk.label}</span>
+                <span style={styles.gradeLabel}>{label}</span>
                 <span style={styles.gradeIcon}>{cell.hit ? "✅" : "❌"}</span>
-                <span style={{ ...styles.gradePct, color: pctColor(cell.pct) }}>{cell.pct}%</span>
+                <span style={{ ...styles.gradePct, color: pctColor(pct) }}>{pct}%</span>
               </div>
             );
           })}
