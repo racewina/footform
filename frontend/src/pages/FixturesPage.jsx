@@ -167,8 +167,10 @@ function tint(hex) {
   return `rgba(${r},${g},${b},0.16)`;
 }
 
-export default function FixturesPage({ leagueId }) {
-  const [date, setDate] = useState(() => startOfToday());
+export default function FixturesPage({ leagueId, date, onDateChange }) {
+  // The viewed date is app-wide (shared with the sidebar's date selector), so
+  // picking a day in either place keeps the whole app in sync.
+  const setDate = onDateChange;
   const [filterMarket, setFilterMarket] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all"); // all | live | upcoming | finished
   const [withinFilter, setWithinFilter] = useState("all"); // all | 3 | 6 | 12 (hours, today only)
@@ -185,7 +187,7 @@ export default function FixturesPage({ leagueId }) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["fixtures", leagueId, dateStr],
     queryFn: () => fetchFixtures(leagueId, dateStr),
-    keepPreviousData: true,
+    placeholderData: (prev) => prev, // keep the list visible while a new date loads (v5)
   });
 
   // Live scores overlay (polled every 30s). Only relevant when viewing today.

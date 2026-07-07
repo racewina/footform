@@ -23,6 +23,13 @@ const spinnerCSS = `
 export default function App() {
   const [selectedLeague, setSelectedLeague] = useState("today");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // App-wide viewed date, shared by the sidebar's date selector and the fixtures
+  // view, so picking a day in either keeps the whole app on that day.
+  const [viewDate, setViewDate] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
   // In-app navigation history wired into the browser History API so the Android
   // hardware/gesture back (and the in-app back button) step through views instead
   // of closing the PWA. A ref mirrors the stack so the popstate listener — bound
@@ -63,6 +70,8 @@ export default function App() {
         <Sidebar
           selectedId={selectedLeague}
           onSelect={navigate}
+          date={viewDate}
+          onDateChange={setViewDate}
           mobileOpen={mobileMenuOpen}
           onClose={() => setMobileMenuOpen(false)}
         />
@@ -93,7 +102,7 @@ export default function App() {
                 : selectedLeague === "safe-results"
                   ? <SafeBetsResultsPage />
                   : selectedLeague
-                    ? <FixturesPage leagueId={selectedLeague} />
+                    ? <FixturesPage leagueId={selectedLeague} date={viewDate} onDateChange={setViewDate} />
                     : <NoLeaguePrompt />
           }
         </main>

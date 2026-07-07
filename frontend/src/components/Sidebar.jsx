@@ -10,29 +10,52 @@ async function fetchLeagues() {
   return res.json();
 }
 
-async function fetchCounts() {
-  const res = await fetch(`/api/counts?tz=${encodeURIComponent(TZ)}`);
+async function fetchCounts(dateStr) {
+  const res = await fetch(`/api/counts?date=${dateStr}&tz=${encodeURIComponent(TZ)}`);
   if (!res.ok) throw new Error("Failed to load counts");
   return res.json();
 }
 
-export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
+const ymd = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const parseYmd = (s) => {
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+};
+
+export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobileOpen, onClose }) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["leagues"],
     queryFn: fetchLeagues,
     staleTime: 24 * 60 * 60 * 1000,
   });
 
-  // Today's match counts per league, for the country/league badges.
+  const viewDate = date instanceof Date ? date : new Date();
+  const dateStr = ymd(viewDate);
+  const isToday = dateStr === ymd(new Date());
+
+  // Match counts per league for the viewed date, for the country/league badges.
   const { data: countsData } = useQuery({
-    queryKey: ["counts"],
-    queryFn: fetchCounts,
+    queryKey: ["counts", dateStr],
+    queryFn: () => fetchCounts(dateStr),
     staleTime: 5 * 60 * 1000,
-    refetchInterval: 5 * 60 * 1000,
+    refetchInterval: isToday ? 5 * 60 * 1000 : false,
+    placeholderData: (prev) => prev, // keep counts visible while a new date loads (v5)
   });
   const counts = countsData?.counts || {};
   const countFor = (id) => counts[String(id)] || 0;
   const countryTotal = (items) => items.reduce((n, l) => n + countFor(l.id), 0);
+
+  const shiftDay = (days) => {
+    const next = new Date(viewDate);
+    next.setDate(next.getDate() + days);
+    next.setHours(0, 0, 0, 0);
+    onDateChange?.(next);
+  };
+  const prettyDate = viewDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const countTitle = isToday ? "Matches today" : `Matches ${prettyDate}`;
 
   const [leaguesOpen, setLeaguesOpen] = useState(false);
   const [openCountry, setOpenCountry] = useState(null);
@@ -78,6 +101,23 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
 
           {leaguesOpen && (
             <div style={styles.leaguesList}>
+              {/* Date selector — the counts (and the fixtures you open) follow it,
+                  so you can browse another day's events across every league. */}
+              <div style={styles.dateNav}>
+                <button style={styles.dateNavBtn} onClick={() => shiftDay(-1)} aria-label="Previous day">‹</button>
+                {/* Full date-picker: a transparent native date input overlays the
+                    label so a tap opens the calendar (works on iOS too). */}
+                <label style={styles.dateNavLabel} title="Pick a date">
+                  {prettyDate}{isToday && <span style={styles.dateNavToday}>Today</span>}
+                  <input
+                    type="date"
+                    value={dateStr}
+                    onChange={(e) => e.target.value && onDateChange?.(parseYmd(e.target.value))}
+                    style={styles.dateNavInput}
+                  />
+                </label>
+                <button style={styles.dateNavBtn} onClick={() => shiftDay(1)} aria-label="Next day">›</button>
+              </div>
               {isLoading && <p style={styles.muted}>Loading leagues…</p>}
               {isError && <p style={styles.error}>Couldn't load leagues</p>}
               {Object.entries(byCountry).map(([country, items]) => {
@@ -95,7 +135,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
                         <span style={styles.itemName}>{country}</span>
                       </span>
                       <span style={styles.countryRight}>
-                        {countryTotal(items) > 0 && <span style={styles.countMatch} title="Matches today">{countryTotal(items)}</span>}
+                        {countryTotal(items) > 0 && <span style={styles.countMatch} title={countTitle}>{countryTotal(items)}</span>}
                         <span style={{ ...styles.chevron, transform: open ? "rotate(90deg)" : "none" }}>›</span>
                       </span>
                     </button>
@@ -115,7 +155,7 @@ export default function Sidebar({ selectedId, onSelect, mobileOpen, onClose }) {
                               <span style={styles.itemName}>{l.name}</span>
                               <span style={styles.subRight}>
                                 {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
-                                {countFor(l.id) > 0 && <span style={styles.countMatch} title="Matches today">{countFor(l.id)}</span>}
+                                {countFor(l.id) > 0 && <span style={styles.countMatch} title={countTitle}>{countFor(l.id)}</span>}
                               </span>
                             </button>
                           );
@@ -280,6 +320,11 @@ const styles = {
   toggleLeft: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
   chevron: { fontSize: 18, color: "var(--text3)", transition: "transform 0.15s ease", flexShrink: 0 },
   leaguesList: { display: "flex", flexDirection: "column", gap: 4 },
+  dateNav: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4, marginBottom: 4, background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: 3 },
+  dateNavBtn: { fontSize: 18, lineHeight: 1, color: "var(--text2)", padding: "2px 10px", borderRadius: 6, flexShrink: 0 },
+  dateNavLabel: { position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--text)", padding: "2px 4px", minWidth: 0, whiteSpace: "nowrap", cursor: "pointer" },
+  dateNavInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", WebkitAppearance: "none", appearance: "none" },
+  dateNavToday: { fontSize: 9, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "0 4px" },
   group: { display: "flex", flexDirection: "column", gap: 2 },
   groupLabel: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text3)", padding: "4px 10px" },
   countryRow: {
