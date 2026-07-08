@@ -35,12 +35,13 @@ app.use("/api", limiter);
 // instantly while a fresh one rebuilds in the background — so users stop hitting
 // the cold path. Only successful (2xx) GETs are cached; errors are never stored.
 //
-// s-maxage=600  → the edge copy is "fresh" for 10 min (data stays current).
+// s-maxage=180 → the edge copy is "fresh" for 3 min (data revalidates often, so
+//   predictions/fixtures stay current); the heavy rebuild mostly reuses already-
+//   cached sub-data (team form, events, odds), so the extra revalidations are cheap.
 // stale-while-revalidate=86400 → after that, the edge keeps serving the cached
 //   copy for up to a day while it refreshes in the background. This is the key to
 //   fast opens: a visitor after a quiet stretch gets an INSTANT stale response
-//   instead of waiting for a cold function + cold cache to rebuild. The only
-//   truly-cold open is the first hit in 24h.
+//   instead of waiting for a cold function + cold cache to rebuild.
 app.use("/api", (req, res, next) => {
   // /live sets its own short cache (scores must stay fresh); /health is uncached.
   if (req.method !== "GET" || req.path === "/health" || req.path === "/live") return next();
@@ -49,7 +50,7 @@ app.use("/api", (req, res, next) => {
     res.set(
       "Cache-Control",
       res.statusCode >= 200 && res.statusCode < 300
-        ? "public, s-maxage=600, stale-while-revalidate=86400"
+        ? "public, s-maxage=180, stale-while-revalidate=86400"
         : "no-store"
     );
     return sendJson(body);
