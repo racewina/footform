@@ -113,6 +113,7 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
                     type="date"
                     value={dateStr}
                     onChange={(e) => e.target.value && onDateChange?.(parseYmd(e.target.value))}
+                    onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch {} }}
                     style={styles.dateNavInput}
                   />
                 </label>

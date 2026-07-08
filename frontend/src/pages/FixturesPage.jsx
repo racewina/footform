@@ -342,6 +342,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
             type="date"
             value={dateStr}
             onChange={(e) => e.target.value && goToDate(parseYmd(e.target.value))}
+            onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch {} }}
             style={styles.dateInput}
           />
         </label>
