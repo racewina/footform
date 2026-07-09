@@ -193,6 +193,14 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   // Live scores overlay (polled every 30s). Only relevant when viewing today.
   const liveMap = useLiveMap();
 
+  // While navigating to a new date, react-query keeps the PREVIOUS day's list on
+  // screen (placeholderData) with isLoading=false — so a slow day (a cold cross-
+  // league build) would show yesterday's matches under the new date. Both
+  // endpoints echo the date they built for, so if it doesn't match the selected
+  // day we're still loading it: show the spinner instead of the wrong-day list.
+  const loadedDate = data?.date;
+  const showLoading = isLoading || (loadedDate != null && loadedDate !== dateStr);
+
   // Moving to a new day repopulates which leagues are playing, so drop the
   // league filter to avoid a stale selection that hides everything.
   const goToDate = (next) => { setLeagueFilter([]); setDate(next); };
@@ -349,7 +357,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
       </div>
 
-      {!isLoading && !isError && totalFixtures > 0 && (
+      {!showLoading && !isError && totalFixtures > 0 && (
         <div style={styles.statusBar}>
           <div style={styles.segGroup} role="tablist" aria-label="Filter by match status">
             {STATUS_SEGMENTS.map((s) => {
@@ -450,9 +458,9 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
       </div>
 
       <div style={styles.list}>
-        {isLoading && <Spinner />}
+        {showLoading && <Spinner />}
         {isError && <p style={styles.error}>{error.message}</p>}
-        {!isLoading && !isError && visibleCount === 0 && (
+        {!showLoading && !isError && visibleCount === 0 && (
           <p style={styles.empty}>
             {totalFixtures === 0
               ? isTodayView
@@ -463,7 +471,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
                 : "No matches meet this prediction filter."}
           </p>
         )}
-        {!isLoading && !isError && isTodayView &&
+        {!showLoading && !isError && isTodayView &&
           flatToday.map(({ fx, league, season }) => (
             <FixtureCard
               key={fx.id}
@@ -476,7 +484,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
             />
           ))}
 
-        {!isLoading && !isError && !isTodayView && displayGroups.map((g) => (
+        {!showLoading && !isError && !isTodayView && displayGroups.map((g) => (
           <div key={g.league.id} style={styles.leagueGroup}>
             <div style={styles.groupHeader}>
               <span style={{ fontSize: 16 }}>{g.league.flag}</span>
