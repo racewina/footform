@@ -43,8 +43,9 @@ app.use("/api", limiter);
 //   fast opens: a visitor after a quiet stretch gets an INSTANT stale response
 //   instead of waiting for a cold function + cold cache to rebuild.
 app.use("/api", (req, res, next) => {
-  // /live sets its own short cache (scores must stay fresh); /health is uncached.
-  if (req.method !== "GET" || req.path === "/health" || req.path === "/live") return next();
+  // /live sets its own short cache (scores must stay fresh); /health + the cron
+  // warm trigger are uncached (they must run, never serve a cached body).
+  if (req.method !== "GET" || req.path === "/health" || req.path === "/live" || req.path === "/cron/warm") return next();
   const sendJson = res.json.bind(res);
   res.json = (body) => {
     res.set(
@@ -66,6 +67,60 @@ app.get("/api/health", (req, res) => {
     cache: cacheStats(),
     env: process.env.NODE_ENV,
     time: new Date().toISOString(),
+  });
+});
+
+// Cache-warming trigger, hit by a Vercel Cron (see vercel.json `crons`). It
+// requests the heavy cross-league aggregates THROUGH the edge for the audience
+// timezone(s), today + tomorrow — so the edge/serverless caches stay hot and real
+// users never trigger the cold cross-league build. Tomorrow is warmed too so the
+// local-midnight date rollover is already built when it happens.
+//
+// WARM_TZS (comma-separated IANA zones) defaults to America/Toronto. Set
+// CRON_SECRET in the Vercel project and the trigger requires Vercel's
+// `Authorization: Bearer <CRON_SECRET>` header; without it the endpoint is open
+// (harmless — it only warms caches — but setting the secret is recommended).
+app.get("/api/cron/warm", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const tzs = (process.env.WARM_TZS || "America/Toronto")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  const host = req.headers.host || "";
+  // Vercel always sets x-forwarded-proto (https in prod); fall back by host so a
+  // local dev run (http://localhost) warms correctly too.
+  const proto = req.headers["x-forwarded-proto"] || (host.startsWith("localhost") ? "http" : "https");
+  const base = `${proto}://${host}`;
+  const ymdInTz = (tz, addDays) => {
+    const d = new Date(Date.now() + addDays * 86400000);
+    // en-CA formats as YYYY-MM-DD; timeZone buckets to that zone's local date.
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(d);
+  };
+
+  const urls = [];
+  for (const tz of tzs) {
+    for (const addDays of [0, 1]) {
+      const q = `date=${ymdInTz(tz, addDays)}&tz=${encodeURIComponent(tz)}`;
+      urls.push(`${base}/api/today?${q}`);
+      urls.push(`${base}/api/counts?${q}`);
+    }
+  }
+
+  const started = Date.now();
+  const settled = await Promise.allSettled(
+    urls.map((u) => fetch(u).then((r) => r.status))
+  );
+  res.set("Cache-Control", "no-store");
+  res.json({
+    warmed: urls.map((u, i) => ({
+      url: u,
+      status: settled[i].status === "fulfilled" ? settled[i].value : "error",
+    })),
+    ms: Date.now() - started,
   });
 });
 
