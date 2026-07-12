@@ -120,15 +120,22 @@ async function fetchCorners(fixtureId, homeId, awayId) {
 
 // Prediction-type filter chips. 1+ and 2+ are per-team markets, so a match
 // qualifies if EITHER team meets the threshold (we take the higher of the two).
+// Each filter reads a value off the whole prediction (markets + top-level probs).
+// `min` overrides the default keep-threshold where the market's natural range
+// differs: O1.5 is usually high (so only surface strong ones), draws never reach
+// 50% (so a lower bar finds the genuinely draw-leaning matches).
 const FILTERS = [
-  { key: "win", label: "Win", value: (m) => m.win ?? 0 },
-  { key: "onePlus", label: "1+", value: (m) => Math.max(m.home1Plus ?? 0, m.away1Plus ?? 0) },
-  { key: "twoPlus", label: "2+", value: (m) => Math.max(m.home2Plus ?? 0, m.away2Plus ?? 0) },
-  { key: "over25", label: "O2.5", value: (m) => m.over25 ?? 0 },
-  { key: "btts", label: "BTTS", value: (m) => m.btts ?? 0 },
+  { key: "win", label: "Win", value: (p) => p.markets.win ?? 0 },
+  { key: "onePlus", label: "1+", value: (p) => Math.max(p.markets.home1Plus ?? 0, p.markets.away1Plus ?? 0) },
+  { key: "twoPlus", label: "2+", value: (p) => Math.max(p.markets.home2Plus ?? 0, p.markets.away2Plus ?? 0) },
+  { key: "over15", label: "O1.5", value: (p) => p.markets.over15 ?? 0, min: 70 },
+  { key: "over25", label: "O2.5", value: (p) => p.markets.over25 ?? 0 },
+  { key: "btts", label: "BTTS", value: (p) => p.markets.btts ?? 0 },
+  { key: "draw", label: "Draw", value: (p) => p.draw ?? 0, min: 30 },
 ];
 const FILTER_BY_KEY = Object.fromEntries(FILTERS.map((f) => [f.key, f]));
-const FILTER_THRESHOLD = 50; // a "prediction type" filter keeps matches >= this %
+const FILTER_THRESHOLD = 50; // default keep-threshold for a "prediction type" filter
+const filterMin = (key) => FILTER_BY_KEY[key]?.min ?? FILTER_THRESHOLD;
 
 // "Starting within" windows for today's slate (hours; "all" = no time filter).
 const WINDOWS = [
@@ -222,12 +229,13 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
 
   if (filterMarket !== "all") {
     const valueOf = FILTER_BY_KEY[filterMarket].value;
+    const min = filterMin(filterMarket);
     groups = groups
       .map((g) => ({
         ...g,
         fixtures: g.fixtures
-          .filter((f) => f.prediction?.markets && valueOf(f.prediction.markets) >= FILTER_THRESHOLD)
-          .sort((a, b) => valueOf(b.prediction.markets) - valueOf(a.prediction.markets)),
+          .filter((f) => f.prediction?.markets && valueOf(f.prediction) >= min)
+          .sort((a, b) => valueOf(b.prediction) - valueOf(a.prediction)),
       }))
       .filter((g) => g.fixtures.length > 0);
   }
@@ -305,7 +313,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
           flat.sort((a, b) => (a.fx.startTimestamp ?? Infinity) - (b.fx.startTimestamp ?? Infinity));
         } else {
           const valueOf = FILTER_BY_KEY[filterMarket].value;
-          flat.sort((a, b) => valueOf(b.fx.prediction.markets) - valueOf(a.fx.prediction.markets));
+          flat.sort((a, b) => valueOf(b.fx.prediction) - valueOf(a.fx.prediction));
         }
         return flat;
       })()
@@ -414,7 +422,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
           </button>
         ))}
         {filterMarket !== "all" && (
-          <span style={styles.filterHint}>≥ {FILTER_THRESHOLD}%</span>
+          <span style={styles.filterHint}>≥ {filterMin(filterMarket)}%</span>
         )}
         {isTodayView && dayLeagues.length > 1 && (
           <div style={styles.leagueWrap}>
@@ -621,6 +629,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
                 );
               })() : (
                 <>
+                  <AChip label="Over 1.5" val={p.markets.over15} hit={fixture.grade?.grades?.over15?.hit} active={highlight === "over15"} />
                   <AChip label="Over 2.5" val={p.markets.over25} hit={fixture.grade?.grades?.over25?.hit} active={highlight === "over25"} />
                   <AChip label="Both score" val={p.markets.btts} hit={fixture.grade?.grades?.btts?.hit} active={highlight === "btts"} />
                 </>
