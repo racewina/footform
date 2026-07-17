@@ -460,25 +460,21 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   // form-only prediction so one bad upstream never blanks the matchday.
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
   const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
-  // Per-fixture enrichment, gated to skip calls that add no value (cold-build
-  // cost control):
-  //   • odds — bookmakers don't price friendlies or the very lowest tiers, so a
-  //     call there just wastes a rate-gate slot. Skip noProps + tier ≥ 4.
-  //   • injuries — only meaningful/available for the top competitions, so limit
-  //     to the marquee leagues rather than fetching for every fixture everywhere.
+  // Per-fixture odds enrichment, gated to skip calls that add no value (cold-build
+  // cost control): bookmakers don't price friendlies or the very lowest tiers, so
+  // a call there just wastes a rate-gate slot. Skip noProps + tier ≥ 4.
+  //
+  // NOTE: injuries are deliberately NOT surfaced on fixtures. The model still
+  // learns from them internally — getFixtureOutIds drops injured/suspended players
+  // from the projected XI feeding player props — but the raw injury list is not
+  // attached to the response or shown on cards.
   const wantOdds = !league.noProps && (league.tier ?? 1) < 4;
-  const wantInjuries = MARQUEE_LEAGUES.has(String(leagueId));
   const oddsMap = {};
-  const injMap = {};
   await Promise.all(
     fixtures
       .filter((f) => f.status !== "finished" && f.homeTeam.id && f.awayTeam.id)
-      .flatMap((f) => {
-        const tasks = [];
-        if (wantOdds) tasks.push(getFixtureOdds(f.id).then((o) => { oddsMap[f.id] = o; }).catch(() => {}));
-        if (wantInjuries) tasks.push(getFixtureInjuries(f.id, f.homeTeam.id, f.awayTeam.id).then((i) => { injMap[f.id] = i; }).catch(() => {}));
-        return tasks;
-      })
+      .map((f) => (wantOdds ? getFixtureOdds(f.id).then((o) => { oddsMap[f.id] = o; }).catch(() => {}) : null))
+      .filter(Boolean)
   );
   for (const fx of fixtures) {
     if (!fx.homeTeam.id || !fx.awayTeam.id) {
@@ -492,7 +488,6 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
       : null;
     fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
     if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
-    if (injMap[fx.id]) fx.injuries = injMap[fx.id];
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };

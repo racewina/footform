@@ -640,8 +640,6 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
         );
       })()}
 
-      {fixture.injuries && <InjuryStrip injuries={fixture.injuries} home={fixture.homeTeam} away={fixture.awayTeam} />}
-
       {(canShowPlayers || canShowCorners || p?.markets) && (
         <div style={styles.actionRow}>
           {canShowPlayers && (
@@ -1009,32 +1007,6 @@ function AChip({ label, val, raw, hit, active }) {
 // Injured / suspended players for a fixture. Definite outs are shown prominently;
 // doubtful players get a lighter "doubt" treatment. Only renders sides that have
 // someone unavailable.
-function InjuryStrip({ injuries, home, away }) {
-  const sideName = (t) => t?.shortName || t?.name || "";
-  const Row = ({ team, out = [], doubt = [] }) => {
-    if (!out.length && !doubt.length) return null;
-    return (
-      <div style={styles.injRow}>
-        <span style={styles.injTeam}>{team}</span>
-        <span style={styles.injPlayers}>
-          {out.map((p, i) => (
-            <span key={`o${i}`} style={styles.injOut} title={p.reason || "Out"}>{p.name}</span>
-          ))}
-          {doubt.map((p, i) => (
-            <span key={`d${i}`} style={styles.injDoubt} title={p.reason ? `Doubtful — ${p.reason}` : "Doubtful"}>{p.name}?</span>
-          ))}
-        </span>
-      </div>
-    );
-  };
-  return (
-    <div style={styles.injWrap}>
-      <span style={styles.injLabel}>🏥 Unavailable</span>
-      <Row team={sideName(home)} out={injuries.home} doubt={injuries.doubtful?.home} />
-      <Row team={sideName(away)} out={injuries.away} doubt={injuries.doubtful?.away} />
-    </div>
-  );
-}
 
 function GoalStat({ label, val = 0, active }) {
   const color = pctColor(val);
