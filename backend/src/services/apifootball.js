@@ -36,10 +36,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // views fan out across every league, so we keep the same two defenses the old
 // client used: a global gate spacing successive calls, and retry-with-backoff
 // on 429. Tune APIFOOTBALL_MIN_GAP_MS to your plan's per-minute allowance.
-// Default 80ms (~750/min) — the Ultra plan's per-minute cap is well above this,
-// so the tighter gate roughly halves cold-build time; the 429 backoff below is
-// the safety net if a burst ever does hit the ceiling.
-const MIN_GAP_MS = Number(process.env.APIFOOTBALL_MIN_GAP_MS || 80);
+// The Ultra plan's cap is 450 requests/min (= one every 133ms). 150ms (~400/min)
+// stays safely under it with headroom for /counts, /live and lazy props that
+// share this same gate. A tighter gap (the old 80ms ≈ 750/min) BURSTS over the
+// cap during cross-league fan-out, and every league whose calls then 429 gets
+// dropped from the build — so the /today slate came back incomplete and varied
+// build-to-build (different devices saw different match counts).
+const MIN_GAP_MS = Number(process.env.APIFOOTBALL_MIN_GAP_MS || 150);
 const MAX_RETRIES = Number(process.env.APIFOOTBALL_MAX_RETRIES || 4);
 
 let nextSlotAt = 0;
