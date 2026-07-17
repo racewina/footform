@@ -927,8 +927,39 @@ router.get("/today", async (req, res) => {
   if (cached) return res.json({ ...cached, fromCache: true });
 
   try {
+    // Cold cross-league builds are dominated by the per-league season/Elo setup,
+    // so building the many leagues with NO match on this day is pure waste (and,
+    // at the plan's rate cap, an all-league build overruns the function timeout).
+    // One cheap fixtures-by-date pass (the same call /counts uses) tells us which
+    // leagues actually play, so we build only those.
+    const shiftYmd = (ymd, days) => {
+      const [y, mo, d] = ymd.split("-").map(Number);
+      const dt = new Date(Date.UTC(y, mo - 1, d));
+      dt.setUTCDate(dt.getUTCDate() + days);
+      return dt.toISOString().slice(0, 10);
+    };
+    const utcDates = [shiftYmd(targetDate, -1), targetDate, shiftYmd(targetDate, 1)];
+    const probes = await Promise.all(
+      utcDates.map((d) => fetchFixturesByDate(d).then((r) => ({ ok: true, r })).catch(() => ({ ok: false, r: [] })))
+    );
+    // Use the active-league filter as long as a probe succeeded — they're cheap
+    // first-calls that essentially always do. Only if ALL probes fail do we fall
+    // back to building every league (which is what would exceed the timeout).
+    let leaguesToBuild = LEAGUES;
+    if (probes.some((pr) => pr.ok)) {
+      const active = new Set();
+      for (const f of probes.flatMap((pr) => pr.r)) {
+        const id = String(f.leagueId);
+        if (!LEAGUES_BY_ID[id] || !f.startTimestamp) continue;
+        if (formatDate(new Date(f.startTimestamp * 1000), tz) === targetDate || f.status === "inprogress") {
+          active.add(id);
+        }
+      }
+      leaguesToBuild = LEAGUES.filter((l) => active.has(String(l.id)));
+    }
+
     const groups = await Promise.all(
-      LEAGUES.map((l) =>
+      leaguesToBuild.map((l) =>
         buildLeagueDayAny(l.id, targetDate, tz).catch((e) => {
           console.error(`[today] ${l.id}: ${e.message}`);
           return null;
