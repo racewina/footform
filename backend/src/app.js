@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import fixturesRouter from "./routes/fixtures.js";
+import seoRouter from "./routes/seo.js";
 import { cacheStats } from "./services/cache.js";
 
 const app = express();
@@ -60,6 +61,11 @@ app.use("/api", (req, res, next) => {
 });
 
 app.use("/api", fixturesRouter);
+
+// Server-rendered, crawlable SEO pages (/leagues, /league/:slug). Mounted outside
+// /api so it isn't rate-limited or wrapped by the API cache middleware; it sets
+// its own edge cache headers. vercel.json rewrites these paths to this function.
+app.use("/", seoRouter);
 
 app.get("/api/health", (req, res) => {
   res.json({

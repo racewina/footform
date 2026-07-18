@@ -7,7 +7,9 @@
     "api/index.js": { "maxDuration": 300 }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api" }
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/leagues", "destination": "/api" },
+    { "source": "/league/(.*)", "destination": "/api" }
   ],
   "crons": [
     { "path": "/api/cron/warm", "schedule": "0 */6 * * *" }
