@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://football-app-six.vercel.app/sitemap.xml
