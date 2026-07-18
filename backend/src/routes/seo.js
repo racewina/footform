@@ -27,6 +27,12 @@ export function leagueSlug(l) {
 }
 const SLUG_TO_ID = Object.fromEntries(LEAGUES.map((l) => [leagueSlug(l), l.id]));
 
+// Match page slug: "home-vs-away-<fixtureId>" — the trailing id is what we parse
+// back out to look the fixture up.
+export function matchSlug(fx) {
+  return `${slugify(fx.homeTeam?.name || "home")}-vs-${slugify(fx.awayTeam?.name || "away")}-${fx.id}`;
+}
+
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -89,14 +95,17 @@ ${body}
 </html>`;
 }
 
-// A team-vs-team line with the model's read, as plain crawlable text.
-function fixtureLine(fx) {
+// A team-vs-team line with the model's read, as plain crawlable text, linking to
+// the dedicated match page.
+function fixtureLine(fx, leagueSlugStr) {
   const p = fx.prediction;
   const h = esc(fx.homeTeam?.name || "Home");
   const a = esc(fx.awayTeam?.name || "Away");
-  if (!p || p.home == null) return `<div class="m"><span class="t">${h} vs ${a}</span></div>`;
+  const href = leagueSlugStr ? `/league/${leagueSlugStr}/${matchSlug(fx)}` : null;
+  const title = href ? `<a class="t" href="${href}">${h} vs ${a}</a>` : `<span class="t">${h} vs ${a}</span>`;
+  if (!p || p.home == null) return `<div class="m">${title}</div>`;
   const m = p.markets || {};
-  return `<div class="m"><span class="t">${h} vs ${a}</span>` +
+  return `<div class="m">${title}` +
     `<div class="p">${h} win <b>${p.home}%</b> · Draw <b>${p.draw}%</b> · ${a} win <b>${p.away}%</b>` +
     (m.over15 != null ? ` · Over 1.5 <b>${m.over15}%</b>` : "") +
     (m.over25 != null ? ` · Over 2.5 <b>${m.over25}%</b>` : "") +
@@ -181,7 +190,7 @@ router.get("/league/:slug", async (req, res) => {
   const when = date === today
     ? "today"
     : new Date(date + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
-  const lines = fixtures.map(fixtureLine).join("");
+  const lines = fixtures.map((fx) => fixtureLine(fx, req.params.slug)).join("");
   const body = `<p style="color:#6b8299;font-size:13px"><a href="/leagues">All leagues</a> › ${esc(league.country)}</p>
 <h1>${esc(league.flag)} ${esc(name)} predictions</h1>
 <p class="sub">${esc(league.country)} · ${lines ? `fixtures ${esc(when)}` : "upcoming fixtures"} with model win probabilities, over/under 1.5 &amp; 2.5 goals and both teams to score.</p>
@@ -195,6 +204,86 @@ ${lines || `<p>No ${esc(name)} matches in the next two weeks. Check the live app
     description: `Today's ${name} (${league.country}) match predictions: win probability, over/under 1.5 & 2.5 goals, and both teams to score. Model estimates, updated continuously.`,
     canonical: `${base}/league/${req.params.slug}`,
     jsonLd: fixturesJsonLd(fixtures, name),
+    body,
+  }));
+});
+
+// Per-match page: one fixture's full prediction as crawlable text + SportsEvent
+// structured data. Nested under its league so it reuses the league's cached data
+// (find the match's date via /range, then that day's /fixtures carries the
+// prediction). This is the long-tail: a page per "home vs away prediction".
+router.get("/league/:slug/:matchSlug", async (req, res) => {
+  const base = baseUrl(req);
+  const id = SLUG_TO_ID[req.params.slug];
+  const league = id && LEAGUES_BY_ID[id];
+  const fixtureId = (req.params.matchSlug.match(/(\d+)$/) || [])[1];
+  const notFound = (msg) => res.status(404).type("html").send(page({
+    base, title: `Match not found | ${SITE}`, description: "Match not found.",
+    canonical: `${base}/leagues`,
+    body: `<h1>Match not found</h1><p>${esc(msg)}</p><p>${league ? `<a href="/league/${req.params.slug}">See ${esc(league.name)} fixtures →</a>` : `<a href="/leagues">All leagues →</a>`}</p>`,
+  }));
+  if (!league || !fixtureId) return notFound("This match link isn't valid.");
+
+  let fx = null, date = null;
+  try {
+    const rangeR = await fetch(`${base}/api/fixtures/${id}/range?days=21&tz=UTC`);
+    if (rangeR.ok) {
+      const days = (await rangeR.json()).days || {};
+      for (const [d, list] of Object.entries(days)) {
+        if ((list || []).some((f) => String(f.id) === fixtureId)) { date = d; break; }
+      }
+    }
+    if (date) {
+      const r = await fetch(`${base}/api/fixtures/${id}?date=${date}&tz=UTC`);
+      if (r.ok) fx = ((await r.json()).fixtures || []).find((f) => String(f.id) === fixtureId);
+    }
+  } catch { /* fall through to not-found */ }
+
+  if (!fx) return notFound("This match may have already been played or isn't scheduled in the next few weeks.");
+
+  const h = esc(fx.homeTeam?.name || "Home");
+  const a = esc(fx.awayTeam?.name || "Away");
+  const p = fx.prediction || {};
+  const m = p.markets || {};
+  const ko = fx.startTimestamp ? new Date(fx.startTimestamp * 1000) : null;
+  const koText = ko ? ko.toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC" : "TBC";
+
+  const rows = [];
+  if (p.home != null) rows.push(`<div class="p">Match result — ${h} <b>${p.home}%</b> · Draw <b>${p.draw}%</b> · ${a} <b>${p.away}%</b></div>`);
+  if (m.over15 != null) rows.push(`<div class="p">Over 1.5 goals <b>${m.over15}%</b> · Over 2.5 goals <b>${m.over25}%</b></div>`);
+  if (m.btts != null) rows.push(`<div class="p">Both teams to score <b>${m.btts}%</b></div>`);
+  if (m.home1Plus != null) rows.push(`<div class="p">${h} to score <b>${m.home1Plus}%</b> (2+ <b>${m.home2Plus}%</b>) · ${a} to score <b>${m.away1Plus}%</b> (2+ <b>${m.away2Plus}%</b>)</div>`);
+  if (m.expectedGoals != null) rows.push(`<div class="p">Expected goals <b>${m.expectedGoals}</b></div>`);
+
+  const fav = p.home != null ? (p.home >= p.away && p.home >= p.draw ? h + " are favourites" : p.away >= p.draw ? a + " are favourites" : "a draw is most likely") : null;
+  const lead = fav
+    ? `Our model makes ${fav} in this ${esc(league.name)} fixture` + (p.home != null ? ` — ${h} ${p.home}%, draw ${p.draw}%, ${a} ${p.away}%.` : ".")
+    : `Model prediction for ${h} vs ${a} in the ${esc(league.name)}.`;
+
+  const jsonLd = JSON.stringify({
+    "@context": "https://schema.org", "@type": "SportsEvent",
+    name: `${fx.homeTeam?.name} vs ${fx.awayTeam?.name}`,
+    sport: "Soccer",
+    ...(ko ? { startDate: ko.toISOString() } : {}),
+    homeTeam: { "@type": "SportsTeam", name: fx.homeTeam?.name },
+    awayTeam: { "@type": "SportsTeam", name: fx.awayTeam?.name },
+    superEvent: { "@type": "SportsOrganization", name: league.name },
+  });
+
+  const body = `<p style="color:#6b8299;font-size:13px"><a href="/leagues">All leagues</a> › <a href="/league/${req.params.slug}">${esc(league.flag)} ${esc(league.name)}</a> › ${h} vs ${a}</p>
+<h1>${h} vs ${a} prediction</h1>
+<p class="sub">${esc(league.name)} · ${esc(koText)}</p>
+<p>${lead}</p>
+<div class="m">${rows.join("") || "<div class='p'>Prediction not available yet.</div>"}</div>
+<a class="cta" href="/">Open in the live app →</a>`;
+
+  res.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
+  res.type("html").send(page({
+    base,
+    title: `${fx.homeTeam?.name} vs ${fx.awayTeam?.name} prediction — ${league.name} | ${SITE}`,
+    description: `${fx.homeTeam?.name} vs ${fx.awayTeam?.name} (${league.name}) prediction` + (p.home != null ? `: ${fx.homeTeam?.name} win ${p.home}%, draw ${p.draw}%, ${fx.awayTeam?.name} win ${p.away}%` : "") + (m.over25 != null ? `, over 2.5 ${m.over25}%, BTTS ${m.btts}%` : "") + ". Model estimate — not betting advice.",
+    canonical: `${base}/league/${req.params.slug}/${req.params.matchSlug}`,
+    jsonLd,
     body,
   }));
 });
