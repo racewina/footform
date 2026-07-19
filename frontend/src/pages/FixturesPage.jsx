@@ -242,20 +242,6 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
 
   const totalFixtures = groups.reduce((n, g) => n + g.fixtures.length, 0);
 
-  // Leagues that actually have matches today — drives the league filter dropdown
-  // (a short, relevant list rather than all 26 competitions).
-  const dayLeagues = isTodayView
-    ? groups.map((g) => ({ id: String(g.league.id), name: g.league.name, flag: g.league.flag }))
-    : [];
-
-  // Summary label for the multi-select button.
-  const leagueSummary =
-    leagueFilter.length === 0
-      ? "All leagues"
-      : leagueFilter.length === 1
-        ? dayLeagues.find((l) => l.id === leagueFilter[0])?.name || "1 league"
-        : `${leagueFilter.length} leagues`;
-
   // A fixture's live status. The 30s live poll is more current than the
   // edge-cached feed, so a match counts as live if it's in the live map even
   // when the cached status still says upcoming.
@@ -284,6 +270,23 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
     if (statusOf(fx) === "finished") return false;
     return !fx.startTimestamp || fx.startTimestamp * 1000 <= withinCutoff;
   };
+
+  // Leagues that have a match STARTING within the selected window — drives the
+  // league filter dropdown, so narrowing the "within" time also narrows the
+  // league list to only what's actually kicking off in that horizon.
+  const dayLeagues = isTodayView
+    ? groups
+        .filter((g) => g.fixtures.some((fx) => passWithin(fx)))
+        .map((g) => ({ id: String(g.league.id), name: g.league.name, flag: g.league.flag }))
+    : [];
+
+  // Summary label for the multi-select button.
+  const leagueSummary =
+    leagueFilter.length === 0
+      ? "All leagues"
+      : leagueFilter.length === 1
+        ? dayLeagues.find((l) => l.id === leagueFilter[0])?.name || "1 league"
+        : `${leagueFilter.length} leagues`;
 
   // Fixtures the status filter applies to (post prediction + league + time filter),
   // for both the counts on the segmented control and the actual filtering.
