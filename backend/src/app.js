@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import fixturesRouter from "./routes/fixtures.js";
 import seoRouter from "./routes/seo.js";
 import { cacheStats } from "./services/cache.js";
+import { snapshotEnabled, loadSnapshot, saveSnapshot } from "./services/snapshot.js";
 
 const app = express();
 
@@ -55,6 +56,39 @@ app.use("/api", (req, res, next) => {
         ? "public, s-maxage=180, stale-while-revalidate=86400"
         : "no-store"
     );
+    return sendJson(body);
+  };
+  next();
+});
+
+// Persisted-snapshot layer for the two heavy cross-league aggregates. The edge
+// cache handles repeat visitors, but a request that actually REACHES this origin
+// (new serverless instance, a region that hasn't cached yet, or the first hit
+// after a deploy wiped the edge) used to pay the full 1-2 minute rebuild. Here we
+// serve the last finished slate from the persistent store instead — instantly —
+// and save every freshly-built slate back for the next cold path.
+//
+// Runs AFTER the Cache-Control wrapper above so hits still get the right headers,
+// and no-ops entirely when the store isn't configured.
+const SNAPSHOT_PATHS = new Set(["/today", "/counts"]);
+const SNAPSHOT_TTL = 3 * 60 * 60; // ~3h: comfortably spans the 2-hourly warm cron
+app.use("/api", async (req, res, next) => {
+  if (req.method !== "GET" || !SNAPSHOT_PATHS.has(req.path) || !snapshotEnabled()) return next();
+
+  const key = `snap:${req.path}:${req.query.date || ""}:${req.query.tz || ""}`;
+  const hit = await loadSnapshot(key).catch(() => null);
+  if (hit) {
+    res.set("X-Snapshot", "hit");
+    return res.json({ ...hit, fromSnapshot: true });
+  }
+
+  // Miss: let the route build it, then persist the result for the next cold path.
+  const sendJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 200 && res.statusCode < 300 && body && !body.error) {
+      saveSnapshot(key, body, SNAPSHOT_TTL).catch(() => {});
+    }
+    res.set("X-Snapshot", "miss");
     return sendJson(body);
   };
   next();
