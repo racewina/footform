@@ -12,7 +12,7 @@
     { "source": "/league/(.*)", "destination": "/api" }
   ],
   "crons": [
-    { "path": "/api/cron/warm", "schedule": "0 */6 * * *" }
+    { "path": "/api/cron/warm", "schedule": "0 */2 * * *" }
   ],
   "headers": [
     {
