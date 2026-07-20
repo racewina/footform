@@ -66,19 +66,71 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
 
   const leagues = data?.leagues || [];
 
-  // The competitions most people come for, pinned above the country list in a
-  // fixed order (Europe's top 5, then the three UEFA club competitions) so they
-  // never have to be hunted for. Everything else groups by country, A-Z.
-  const TOP_LEAGUE_IDS = ["39", "140", "135", "78", "61", "2", "3", "848"];
-  const topLeagues = TOP_LEAGUE_IDS
-    .map((id) => leagues.find((l) => String(l.id) === id))
-    .filter(Boolean);
+  // Countries pinned above the rest, in this order. They use the SAME collapsible
+  // row as everything else, so a pinned country brings its lower divisions with
+  // it — England carries the Championship, League One and League Two rather than
+  // scattering them further down. That plus the exclusion below is what
+  // decongests the list: seven fewer entries in the A-Z, nothing listed twice.
+  const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America"];
 
   const byCountry = leagues.reduce((acc, l) => {
     (acc[l.country] ||= []).push(l);
     return acc;
   }, {});
-  const countryGroups = Object.entries(byCountry).sort(([a], [b]) => a.localeCompare(b));
+
+  // Every country appears exactly once: pinned, or in the A-Z list, never both.
+  const topGroups = TOP_COUNTRIES.filter((c) => byCountry[c]).map((c) => [c, byCountry[c]]);
+  const countryGroups = Object.entries(byCountry)
+    .filter(([country]) => !TOP_COUNTRIES.includes(country))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  // One row shape for both sections, so a pinned country expands exactly like
+  // any other and there's only one place to change the styling.
+  const renderCountry = ([country, items]) => {
+    const open = openCountry === country;
+    const hasActive = items.some((l) => String(l.id) === String(selectedId));
+    return (
+      <div key={country} style={styles.group}>
+        <button
+          style={{ ...styles.countryRow, ...(hasActive ? styles.countryRowActive : {}) }}
+          onClick={() => setOpenCountry(open ? null : country)}
+          aria-expanded={open}
+        >
+          <span style={styles.countryLeft}>
+            <span style={styles.countryFlag}>{items[0].flag}</span>
+            <span style={styles.itemName}>{country}</span>
+          </span>
+          <span style={styles.countryRight}>
+            {countryTotal(items) > 0 && <span style={styles.countMatch} title={countTitle}>{countryTotal(items)}</span>}
+            <span style={{ ...styles.chevron, transform: open ? "rotate(90deg)" : "none" }}>›</span>
+          </span>
+        </button>
+        {open && (
+          <div style={styles.countryLeagues}>
+            {items.map((l) => {
+              const active = String(l.id) === String(selectedId);
+              return (
+                <button
+                  key={l.id}
+                  style={{ ...styles.subItem, ...(active ? styles.itemActive : {}) }}
+                  onClick={() => {
+                    onSelect(String(l.id));
+                    onClose?.();
+                  }}
+                >
+                  <span style={styles.itemName}>{l.name}</span>
+                  <span style={styles.subRight}>
+                    {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
+                    {countFor(l.id) > 0 && <span style={styles.countMatch} title={countTitle}>{countFor(l.id)}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -131,75 +183,10 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
               </div>
               {isLoading && <p style={styles.muted}>Loading leagues…</p>}
               {isError && <p style={styles.error}>Couldn't load leagues</p>}
-              {topLeagues.length > 0 && (
-                <div style={styles.group}>
-                  <div style={styles.groupLabel}>Top competitions</div>
-                  {topLeagues.map((l) => {
-                    const active = String(l.id) === String(selectedId);
-                    return (
-                      <button
-                        key={`top-${l.id}`}
-                        style={{ ...styles.subItem, ...(active ? styles.itemActive : {}) }}
-                        onClick={() => {
-                          onSelect(String(l.id));
-                          onClose?.();
-                        }}
-                      >
-                        <span style={styles.itemName}>{l.flag} {l.name}</span>
-                        <span style={styles.subRight}>
-                          {countFor(l.id) > 0 && <span style={styles.countMatch} title={countTitle}>{countFor(l.id)}</span>}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              {topGroups.length > 0 && <div style={styles.groupLabel}>Top competitions</div>}
+              {topGroups.map(renderCountry)}
               {countryGroups.length > 0 && <div style={styles.groupLabel}>All countries</div>}
-              {countryGroups.map(([country, items]) => {
-                const open = openCountry === country;
-                const hasActive = items.some((l) => String(l.id) === String(selectedId));
-                return (
-                  <div key={country} style={styles.group}>
-                    <button
-                      style={{ ...styles.countryRow, ...(hasActive ? styles.countryRowActive : {}) }}
-                      onClick={() => setOpenCountry(open ? null : country)}
-                      aria-expanded={open}
-                    >
-                      <span style={styles.countryLeft}>
-                        <span style={styles.countryFlag}>{items[0].flag}</span>
-                        <span style={styles.itemName}>{country}</span>
-                      </span>
-                      <span style={styles.countryRight}>
-                        {countryTotal(items) > 0 && <span style={styles.countMatch} title={countTitle}>{countryTotal(items)}</span>}
-                        <span style={{ ...styles.chevron, transform: open ? "rotate(90deg)" : "none" }}>›</span>
-                      </span>
-                    </button>
-                    {open && (
-                      <div style={styles.countryLeagues}>
-                        {items.map((l) => {
-                          const active = String(l.id) === String(selectedId);
-                          return (
-                            <button
-                              key={l.id}
-                              style={{ ...styles.subItem, ...(active ? styles.itemActive : {}) }}
-                              onClick={() => {
-                                onSelect(String(l.id));
-                                onClose?.();
-                              }}
-                            >
-                              <span style={styles.itemName}>{l.name}</span>
-                              <span style={styles.subRight}>
-                                {l.tier === 2 && <span style={styles.tierBadge}>2nd</span>}
-                                {countFor(l.id) > 0 && <span style={styles.countMatch} title={countTitle}>{countFor(l.id)}</span>}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {countryGroups.map(renderCountry)}
             </div>
           )}
 
