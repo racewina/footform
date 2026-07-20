@@ -65,10 +65,20 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
   const localOnly = typeof window !== "undefined" && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
 
   const leagues = data?.leagues || [];
+
+  // The competitions most people come for, pinned above the country list in a
+  // fixed order (Europe's top 5, then the three UEFA club competitions) so they
+  // never have to be hunted for. Everything else groups by country, A-Z.
+  const TOP_LEAGUE_IDS = ["39", "140", "135", "78", "61", "2", "3", "848"];
+  const topLeagues = TOP_LEAGUE_IDS
+    .map((id) => leagues.find((l) => String(l.id) === id))
+    .filter(Boolean);
+
   const byCountry = leagues.reduce((acc, l) => {
     (acc[l.country] ||= []).push(l);
     return acc;
   }, {});
+  const countryGroups = Object.entries(byCountry).sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <>
@@ -121,7 +131,31 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
               </div>
               {isLoading && <p style={styles.muted}>Loading leagues…</p>}
               {isError && <p style={styles.error}>Couldn't load leagues</p>}
-              {Object.entries(byCountry).map(([country, items]) => {
+              {topLeagues.length > 0 && (
+                <div style={styles.group}>
+                  <div style={styles.groupLabel}>Top competitions</div>
+                  {topLeagues.map((l) => {
+                    const active = String(l.id) === String(selectedId);
+                    return (
+                      <button
+                        key={`top-${l.id}`}
+                        style={{ ...styles.subItem, ...(active ? styles.itemActive : {}) }}
+                        onClick={() => {
+                          onSelect(String(l.id));
+                          onClose?.();
+                        }}
+                      >
+                        <span style={styles.itemName}>{l.flag} {l.name}</span>
+                        <span style={styles.subRight}>
+                          {countFor(l.id) > 0 && <span style={styles.countMatch} title={countTitle}>{countFor(l.id)}</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {countryGroups.length > 0 && <div style={styles.groupLabel}>All countries</div>}
+              {countryGroups.map(([country, items]) => {
                 const open = openCountry === country;
                 const hasActive = items.some((l) => String(l.id) === String(selectedId));
                 return (

@@ -277,15 +277,31 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   const dayLeagues = isTodayView
     ? groups
         .filter((g) => g.fixtures.some((fx) => passWithin(fx)))
-        .map((g) => ({ id: String(g.league.id), name: g.league.name, flag: g.league.flag }))
+        .map((g) => ({
+          id: String(g.league.id),
+          name: g.league.name,
+          flag: g.league.flag,
+          country: g.league.country,
+        }))
     : [];
+
+  // "Serbia Super Liga" — the flag alone isn't enough to tell leagues apart, so
+  // prefix the country. Skipped when the league name already carries it
+  // (e.g. "Argentina Primera C"), which would otherwise read twice.
+  const leagueLabel = (l) =>
+    !l.country || l.name.toLowerCase().startsWith(l.country.toLowerCase())
+      ? l.name
+      : `${l.country} ${l.name}`;
 
   // Summary label for the multi-select button.
   const leagueSummary =
     leagueFilter.length === 0
       ? "All leagues"
       : leagueFilter.length === 1
-        ? dayLeagues.find((l) => l.id === leagueFilter[0])?.name || "1 league"
+        ? (() => {
+            const l = dayLeagues.find((x) => x.id === leagueFilter[0]);
+            return l ? leagueLabel(l) : "1 league";
+          })()
         : `${leagueFilter.length} leagues`;
 
   // Fixtures the status filter applies to (post prediction + league + time filter),
@@ -449,7 +465,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
                   {dayLeagues.map((l) => (
                     <label key={l.id} style={styles.menuItem}>
                       <input type="checkbox" checked={leagueFilter.includes(l.id)} onChange={() => toggleLeague(l.id)} />
-                      <span>{l.flag} {l.name}</span>
+                      <span>{l.flag} {leagueLabel(l)}</span>
                     </label>
                   ))}
                 </div>
