@@ -271,12 +271,34 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
     return !fx.startTimestamp || fx.startTimestamp * 1000 <= withinCutoff;
   };
 
-  // Leagues that have a match STARTING within the selected window — drives the
-  // league filter dropdown, so narrowing the "within" time also narrows the
-  // league list to only what's actually kicking off in that horizon.
+  // Fixtures the status filter applies to (post prediction + league + time filter),
+  // for both the counts on the segmented control and the actual filtering.
+  const statusBase = groups
+    .flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
+    .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id))) && passWithin(x.fx));
+
+  const statusCounts = {
+    all: statusBase.length,
+    live: statusBase.filter((x) => statusOf(x.fx) === "live").length,
+    upcoming: statusBase.filter((x) => statusOf(x.fx) === "upcoming").length,
+    finished: statusBase.filter((x) => statusOf(x.fx) === "finished").length,
+  };
+  // If the chosen bucket empties out (e.g. the last live match ends), fall back
+  // to All so the view is never mysteriously blank.
+  const effStatus = statusFilter !== "all" && statusCounts[statusFilter] === 0 ? "all" : statusFilter;
+
+  // Leagues offered in the filter dropdown. A league qualifies only if it has a
+  // match that survives BOTH active filters — the "within" window AND the status
+  // segment — so picking "Upcoming" stops offering leagues whose games have all
+  // finished. Uses effStatus, not statusFilter, so the list always describes what
+  // is actually on screen even when an emptied bucket falls back to All.
+  //
+  // Already-selected leagues stay listed even when they no longer qualify:
+  // hiding a checked box would leave a filter active with no way to switch it off.
+  const inCurrentView = (fx) => passWithin(fx) && (effStatus === "all" || statusOf(fx) === effStatus);
   const dayLeagues = isTodayView
     ? groups
-        .filter((g) => g.fixtures.some((fx) => passWithin(fx)))
+        .filter((g) => g.fixtures.some(inCurrentView) || leagueFilter.includes(String(g.league.id)))
         .map((g) => ({
           id: String(g.league.id),
           name: g.league.name,
@@ -303,22 +325,6 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
             return l ? leagueLabel(l) : "1 league";
           })()
         : `${leagueFilter.length} leagues`;
-
-  // Fixtures the status filter applies to (post prediction + league + time filter),
-  // for both the counts on the segmented control and the actual filtering.
-  const statusBase = groups
-    .flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
-    .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id))) && passWithin(x.fx));
-
-  const statusCounts = {
-    all: statusBase.length,
-    live: statusBase.filter((x) => statusOf(x.fx) === "live").length,
-    upcoming: statusBase.filter((x) => statusOf(x.fx) === "upcoming").length,
-    finished: statusBase.filter((x) => statusOf(x.fx) === "finished").length,
-  };
-  // If the chosen bucket empties out (e.g. the last live match ends), fall back
-  // to All so the view is never mysteriously blank.
-  const effStatus = statusFilter !== "all" && statusCounts[statusFilter] === 0 ? "all" : statusFilter;
 
   // The cross-league "today" view reads best as one time-ordered list rather
   // than league-by-league. Flatten every group into a single stream, carrying
