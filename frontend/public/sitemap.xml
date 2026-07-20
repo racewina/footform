@@ -300,4 +300,28 @@
     <loc>https://football-app-six.vercel.app/league/international-club-friendlies</loc>
     <changefreq>daily</changefreq>
   </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/sweden-superettan</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/austria-bundesliga</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/austria-2-liga</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/south-africa-premier-soccer-league</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/south-america-conmebol-libertadores</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/south-america-conmebol-sudamericana</loc>
+    <changefreq>daily</changefreq>
+  </url>
 </urlset>
