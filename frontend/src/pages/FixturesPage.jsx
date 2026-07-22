@@ -184,6 +184,12 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   // Multi-select: an array of league ids. Empty = all leagues.
   const [leagueFilter, setLeagueFilter] = useState([]);
   const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
+  // The model disclaimer is always available but collapses behind an ⓘ on phones,
+  // where the 3-line block otherwise pushed the first match card below the fold.
+  // Default open on wide screens, closed on narrow ones.
+  const [noteOpen, setNoteOpen] = useState(
+    () => !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 600px)").matches)
+  );
   const toggleLeague = (id) =>
     setLeagueFilter((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const dateInputRef = useRef(null);
@@ -366,7 +372,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   return (
     <div style={styles.page}>
       <style>{pulseCSS}</style>
-      <div style={styles.dateBar}>
+      <div className="ff-datebar" style={styles.dateBar}>
         <button style={styles.navBtn} onClick={() => shift(-1)} aria-label="Previous day">
           ‹
         </button>
@@ -388,10 +394,20 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
           />
         </label>
         <button style={styles.navBtn} onClick={() => shift(1)}>›</button>
+        <button
+          className="ff-infobtn"
+          style={styles.infoBtn}
+          onClick={() => setNoteOpen((o) => !o)}
+          aria-expanded={noteOpen}
+          aria-label="About these predictions"
+          title="About these predictions"
+        >
+          ⓘ
+        </button>
       </div>
 
       {!showLoading && !isError && totalFixtures > 0 && (
-        <div style={styles.statusBar}>
+        <div className="ff-statusbar" style={styles.statusBar}>
           <div style={styles.segGroup} role="tablist" aria-label="Filter by match status">
             {STATUS_SEGMENTS.map((s) => {
               const count = statusCounts[s.key];
@@ -418,18 +434,50 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
               );
             })}
           </div>
-          {isToday && (
-            <label style={styles.withinField}>
-              <span style={styles.withinLabel}>Within</span>
-              <select style={styles.withinSelect} value={withinFilter} onChange={(e) => setWithinFilter(e.target.value)}>
-                {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
-              </select>
-            </label>
-          )}
+          <div style={styles.rightCluster}>
+            {isToday && (
+              <label style={styles.withinField}>
+                <span style={styles.withinLabel}>Within</span>
+                <select style={styles.withinSelect} value={withinFilter} onChange={(e) => setWithinFilter(e.target.value)}>
+                  {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
+                </select>
+              </label>
+            )}
+            {isTodayView && dayLeagues.length > 1 && (
+              <div style={styles.leagueWrap}>
+                <button
+                  style={styles.leagueSelect}
+                  onClick={() => setLeagueMenuOpen((o) => !o)}
+                  aria-haspopup="listbox"
+                  aria-expanded={leagueMenuOpen}
+                >
+                  <span style={styles.leagueSelectText}>{leagueSummary}</span>
+                  <span style={styles.leagueCaret}>▾</span>
+                </button>
+                {leagueMenuOpen && (
+                  <>
+                    <div style={styles.menuOverlay} onClick={() => setLeagueMenuOpen(false)} />
+                    <div style={styles.leagueMenu} role="listbox">
+                      <label style={styles.menuItem}>
+                        <input type="checkbox" checked={leagueFilter.length === 0} onChange={() => setLeagueFilter([])} />
+                        <span>All leagues</span>
+                      </label>
+                      {dayLeagues.map((l) => (
+                        <label key={l.id} style={styles.menuItem}>
+                          <input type="checkbox" checked={leagueFilter.includes(l.id)} onChange={() => toggleLeague(l.id)} />
+                          <span>{l.flag} {leagueLabel(l)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      <div style={styles.filterBar}>
+      <div className="ff-filterbar" style={styles.filterBar}>
         <span style={styles.filterLabel}>Prediction</span>
         <button
           style={{ ...styles.filterChip, ...(filterMarket === "all" ? styles.filterChipActive : {}) }}
@@ -449,48 +497,20 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
         {filterMarket !== "all" && (
           <span style={styles.filterHint}>≥ {filterMin(filterMarket)}%</span>
         )}
-        {isTodayView && dayLeagues.length > 1 && (
-          <div style={styles.leagueWrap}>
-            <button
-              style={styles.leagueSelect}
-              onClick={() => setLeagueMenuOpen((o) => !o)}
-              aria-haspopup="listbox"
-              aria-expanded={leagueMenuOpen}
-            >
-              <span style={styles.leagueSelectText}>{leagueSummary}</span>
-              <span style={styles.leagueCaret}>▾</span>
-            </button>
-            {leagueMenuOpen && (
-              <>
-                <div style={styles.menuOverlay} onClick={() => setLeagueMenuOpen(false)} />
-                <div style={styles.leagueMenu} role="listbox">
-                  <label style={styles.menuItem}>
-                    <input type="checkbox" checked={leagueFilter.length === 0} onChange={() => setLeagueFilter([])} />
-                    <span>All leagues</span>
-                  </label>
-                  {dayLeagues.map((l) => (
-                    <label key={l.id} style={styles.menuItem}>
-                      <input type="checkbox" checked={leagueFilter.includes(l.id)} onChange={() => toggleLeague(l.id)} />
-                      <span>{l.flag} {leagueLabel(l)}</span>
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
       </div>
 
-      <div style={styles.note}>
-        <span aria-hidden="true">ⓘ</span>
-        <span>
-          Predictions come from our in-house model, refreshed continuously with
-          the latest data. They may update up to 30&nbsp;minutes before kickoff as
-          confirmed team news comes in. Estimates only — not betting advice.
-        </span>
-      </div>
+      {noteOpen && (
+        <div className="ff-note" style={styles.note}>
+          <span aria-hidden="true">ⓘ</span>
+          <span>
+            Predictions come from our in-house model, refreshed continuously with
+            the latest data. They may update up to 30&nbsp;minutes before kickoff as
+            confirmed team news comes in. Estimates only — not betting advice.
+          </span>
+        </div>
+      )}
 
-      <div style={styles.list}>
+      <div className="ff-list" style={styles.list}>
         {showLoading && <Spinner />}
         {isError && <p style={styles.error}>{error.message}</p>}
         {!showLoading && !isError && visibleCount === 0 && (
@@ -575,6 +595,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
       <div
         role="button"
         tabIndex={0}
+        className="ff-cardhead"
         style={styles.cardHead}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
@@ -639,7 +660,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
                 {teamCode(fixture.awayTeam)} <b style={{ color: favColor("away") }}>{p.away}%</b>{favSide === "away" && tick(winnerHit)}
               </span>
             </div>
-            <div style={styles.aChips}>
+            <div className="ff-achips" style={styles.aChips}>
               {highlight === "onePlus" || highlight === "twoPlus" ? (() => {
                 // Selecting a team-goals market surfaces each side's scoring
                 // probability right on the card, so the model's strength read is
@@ -666,7 +687,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
       })()}
 
       {(canShowPlayers || canShowCorners || p?.markets) && (
-        <div style={styles.actionRow}>
+        <div className="ff-actionrow" style={styles.actionRow}>
           {canShowPlayers && (
             <button
               style={{ ...styles.actionBtn, ...(showPlayers ? styles.actionBtnActive : {}) }}
@@ -1110,14 +1131,16 @@ function Spinner({ small }) {
 
 const styles = {
   page: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
-  dateBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "14px 24px", borderBottom: "1px solid var(--border)" },
+  dateBar: { position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "14px 24px", borderBottom: "1px solid var(--border)" },
   navBtn: { fontSize: 22, color: "var(--text2)", padding: "2px 14px", borderRadius: 8, background: "var(--bg2)" },
+  infoBtn: { position: "absolute", right: 20, top: "50%", transform: "translateY(-50%)", fontSize: 15, lineHeight: 1, color: "var(--text3)", background: "transparent", border: "none", padding: 6, cursor: "pointer" },
   navBtnDisabled: { opacity: 0.3, cursor: "not-allowed" },
   dateLabel: { position: "relative", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15, minWidth: 180, justifyContent: "center", color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 14px", cursor: "pointer" },
   dateLabelIcon: { fontSize: 13, opacity: 0.8 },
   dateInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, border: "none", padding: 0, margin: 0, cursor: "pointer", WebkitAppearance: "none", appearance: "none" },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
   statusBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 24px 0", flexWrap: "wrap" },
+  rightCluster: { display: "inline-flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 },
   withinField: { display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 },
   withinLabel: { fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 },
   withinSelect: { background: "var(--bg2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", fontSize: 13 },
@@ -1133,7 +1156,7 @@ const styles = {
   filterChip: { fontSize: 13, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px" },
   filterChipActive: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)", fontWeight: 600 },
   filterHint: { fontSize: 12, color: "var(--text3)" },
-  leagueWrap: { position: "relative", marginLeft: "auto" },
+  leagueWrap: { position: "relative" },
   leagueSelect: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 10px", maxWidth: 220 },
   leagueSelectText: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   leagueCaret: { fontSize: 9, color: "var(--text3)", flexShrink: 0 },

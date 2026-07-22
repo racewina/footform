@@ -104,3 +104,43 @@ button {
     min-width: 0 !important;
   }
 }
+
+/* Phone compaction for the fixtures list. The filter chrome (date nav, status
+   tabs, prediction chips, disclaimer) used to eat ~half the screen, so only one
+   match card fit above the fold. Tighten every band and each card so two full
+   cards are visible without scrolling. Desktop keeps the roomier spacing. */
+@media (max-width: 600px) {
+  /* Date bar: slimmer, and leave room for the ⓘ on the right. */
+  .ff-datebar {
+    padding: 7px 44px 7px 16px !important;
+    gap: 10px !important;
+  }
+  .ff-infobtn { right: 10px !important; }
+
+  /* Status + Within/All-leagues row: tighter, wraps only if it must. */
+  .ff-statusbar { padding: 8px 12px 0 !important; gap: 8px !important; }
+
+  /* Prediction filters: one horizontally-scrollable row instead of wrapping to
+     three. Safe now that the All-leagues dropdown lives in the status row —
+     an overflow container here would otherwise clip that popover. */
+  .ff-filterbar {
+    padding: 8px 12px !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+  }
+  .ff-filterbar::-webkit-scrollbar { display: none; }
+
+  /* Disclaimer, when expanded on a phone, gets tighter padding. */
+  .ff-note { padding: 6px 16px !important; }
+
+  /* Cards: less outer gap and less internal padding, smaller stat numbers and
+     action buttons — same content, ~65px shorter per card. */
+  .ff-list { padding: 12px 12px !important; gap: 10px !important; }
+  .ff-cardhead { padding: 10px 14px 8px !important; }
+  .ff-achips { gap: 6px !important; }
+  .ff-achips > * { padding: 5px 3px !important; }
+  .ff-achips > * > *:last-child { font-size: 14px !important; }
+  .ff-actionrow { padding: 0 14px 10px !important; gap: 6px !important; }
+  .ff-actionrow > * { padding: 6px 6px !important; font-size: 11.5px !important; }
+}
