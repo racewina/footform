@@ -10,6 +10,7 @@ import VipBetPage from "./pages/VipBetPage";
 import ValueBetsPage from "./pages/ValueBetsPage";
 import PropsFinderPage from "./pages/PropsFinderPage";
 import RoiPage from "./pages/RoiPage";
+import PullToRefresh from "./components/PullToRefresh";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -52,6 +53,12 @@ export default function App() {
     if (navStack.length) window.history.back();
   };
 
+  // Pull-to-refresh handler: refetch every query mounted on the current view
+  // (fixtures, counts, whatever the page reads), so the gesture refreshes the
+  // data the user is actually looking at — the same effect Android's native
+  // pull gives, without a full page reload that would drop scroll/nav state.
+  const handleRefresh = () => queryClient.refetchQueries({ type: "active" });
+
   useEffect(() => {
     const onPop = () => {
       const stack = navStackRef.current;
@@ -87,6 +94,7 @@ export default function App() {
             </button>
             <LeaguePill leagueId={selectedLeague} />
           </header>
+          <PullToRefresh onRefresh={handleRefresh}>
           {selectedLeague === "results"
             ? <ResultsPage />
             : selectedLeague === "props-finder"
@@ -105,6 +113,7 @@ export default function App() {
                     ? <FixturesPage leagueId={selectedLeague} date={viewDate} onDateChange={setViewDate} />
                     : <NoLeaguePrompt />
           }
+          </PullToRefresh>
         </main>
       </div>
       <Analytics />
