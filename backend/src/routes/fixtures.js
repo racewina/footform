@@ -15,7 +15,12 @@ import {
   fetchLiveFixtures,
   fetchFixturesByDate,
 } from "../services/apifootball.js";
-import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines } from "../services/predictions.js";
+import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines, FORM_HALF_LIFE_DAYS } from "../services/predictions.js";
+
+// Recency-decay options for computePrediction: weight each team's form toward
+// its most recent games, measured from the match's kickoff. `refTs` is the
+// kickoff (unix seconds); a future kickoff is fine (prior games are all older).
+const decayFor = (refTs) => ({ decay: { refTs, halfLifeDays: FORM_HALF_LIFE_DAYS } });
 import { playerProps } from "../services/players.js";
 import { foulMatchups } from "../services/positional.js";
 import { teamCornerRates, computeCornerPrediction } from "../services/corners.js";
@@ -486,7 +491,7 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
-    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
+    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(fx.startTimestamp));
     if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
   }
 
@@ -553,7 +558,7 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
     const grade = prediction.markets
       ? gradeMatch(prediction.markets, homeScore, awayScore)
       : null;
@@ -635,7 +640,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
     if (!prediction.markets) continue;
 
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
@@ -682,7 +687,7 @@ async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines);
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
     if (!prediction.markets) continue;
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
 
@@ -1275,7 +1280,7 @@ router.get("/match/:matchId/prediction", async (req, res) => {
 
     const homeForm = parseFormFromEvents(homeData.events || [], Number(homeTeamId));
     const awayForm = parseFormFromEvents(awayData.events || [], Number(awayTeamId));
-    const prediction = computePrediction(homeForm, awayForm);
+    const prediction = computePrediction(homeForm, awayForm, null, null, decayFor(Math.floor(Date.now() / 1000)));
 
     cacheSet(cacheKey, prediction, TTL.TEAM_FORM);
     res.json({ ...prediction, fromCache: false });
