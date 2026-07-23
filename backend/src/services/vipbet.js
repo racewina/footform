@@ -172,6 +172,15 @@ function matchBuilder(fx, g, corner) {
     leagueFlag: g.league?.flag,
     kickoff: fx.startTimestamp,
     interest,
+    // Standalone marginal percentages surfaced for reference on every card,
+    // regardless of whether the leg qualified or was deduped out of the priced
+    // combo — these are the model's raw single-market probabilities, not folded
+    // into the correlation-correct combined price.
+    stats: {
+      btts: typeof m.btts === "number" ? m.btts : null,
+      homeScore: typeof m.home1Plus === "number" ? m.home1Plus : null,
+      awayScore: typeof m.away1Plus === "number" ? m.away1Plus : null,
+    },
     legs,
     legCount: legs.length,
     combinedOdds,
