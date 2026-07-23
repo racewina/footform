@@ -81,6 +81,38 @@ function tau(i, j, lh, la, rho) {
   return 1;
 }
 
+// Exact joint probability that a set of scoreline-based legs ALL land, read off
+// the same Dixon–Coles grid the markets come from. Unlike multiplying each leg's
+// marginal price (which assumes independence), this captures their correlation —
+// "home to win" and "away to score" pull against each other, "over 2.5" and
+// "both score" reinforce — so a same-match combo is priced correctly instead of
+// inflated. `legKeys` ⊆ winner/home1Plus/home2Plus/away1Plus/away2Plus/over25/
+// btts; `favSide` ("home"|"away") resolves the winner leg. Returns 0..1.
+export function jointGoalProbability(lambdaHome, lambdaAway, legKeys, favSide) {
+  const k = new Set(legKeys);
+  const holds = (i, j) =>
+    (!k.has("winner") || (favSide === "home" ? i > j : i < j)) &&
+    (!k.has("home1Plus") || i >= 1) &&
+    (!k.has("home2Plus") || i >= 2) &&
+    (!k.has("away1Plus") || j >= 1) &&
+    (!k.has("away2Plus") || j >= 2) &&
+    (!k.has("over25") || i + j >= 3) &&
+    (!k.has("btts") || (i >= 1 && j >= 1));
+
+  const ph = [], pa = [];
+  for (let g = 0; g <= MAX_GOALS; g++) { ph[g] = poissonP(g, lambdaHome); pa[g] = poissonP(g, lambdaAway); }
+
+  let sum = 0, hit = 0;
+  for (let i = 0; i <= MAX_GOALS; i++) {
+    for (let j = 0; j <= MAX_GOALS; j++) {
+      const p = ph[i] * pa[j] * tau(i, j, lambdaHome, lambdaAway, RHO);
+      sum += p;
+      if (holds(i, j)) hit += p;
+    }
+  }
+  return sum > 0 ? hit / sum : 0;
+}
+
 // Build the full P(i,j) scoreline grid for the two expected-goal rates and read
 // every market off it, guaranteeing match-result and goal markets agree.
 function marketsFromGoals(lambdaHome, lambdaAway) {

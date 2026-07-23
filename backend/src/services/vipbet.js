@@ -11,7 +11,23 @@
 // is a real edge, whereas combining different matches just needs two dominations
 // at once (the flaw that sank the old VIP).
 
+import { jointGoalProbability } from "./predictions.js";
+
 const round2 = (x) => Math.round(x * 100) / 100;
+
+// Recover the model's per-side expected goals from the prediction's public
+// marginals: the split comes from each side's 1+ probability, rescaled so the
+// pair sums to the model's expected-goals total. Enough to rebuild the scoreline
+// grid for correlation-correct combined pricing, without exposing per-side
+// expected goals as a new API field.
+function reconstructLambdas(m) {
+  const clampP = (p) => Math.min(0.995, Math.max(0.02, (p ?? 0) / 100));
+  const lh = -Math.log(1 - clampP(m.home1Plus));
+  const la = -Math.log(1 - clampP(m.away1Plus));
+  const total = typeof m.expectedGoals === "number" && m.expectedGoals > 0 ? m.expectedGoals : lh + la;
+  const scale = lh + la > 0 ? total / (lh + la) : 1;
+  return { lambdaHome: lh * scale, lambdaAway: la * scale };
+}
 
 // Kept for the route's corner-shortlist ranking (which fixtures deserve a corner
 // fetch). The goal/result candidate menu for a fixture.
@@ -122,9 +138,20 @@ function matchBuilder(fx, g, corner) {
     return leg;
   });
 
-  let odds = 1;
-  for (const l of legs) odds *= l.odds;
-  const combinedOdds = round2(odds);
+  // Correlation-correct combined price. The goal/result legs all live on ONE
+  // scoreline distribution, so their true combined probability is the joint over
+  // that grid — not the product of marginals, which assumes independence and
+  // misprices correlated picks (and, as a bonus, absorbs any nested overlap like
+  // BTTS with both team-to-score). The corner leg is a separate market, so its
+  // marginal is multiplied in independently.
+  const GRID_KEYS = new Set(["winner", "home1Plus", "home2Plus", "away1Plus", "away2Plus", "over25", "btts"]);
+  const gridKeys = picks.map((c) => c.marketKey).filter((key) => GRID_KEYS.has(key));
+  const { lambdaHome, lambdaAway } = reconstructLambdas(m);
+  let combinedProb = gridKeys.length
+    ? jointGoalProbability(lambdaHome, lambdaAway, gridKeys, homeFav ? "home" : "away")
+    : 1;
+  for (const c of picks) if (!GRID_KEYS.has(c.marketKey)) combinedProb *= c.prob / 100;
+  const combinedOdds = round2(combinedProb > 0 ? 1 / combinedProb : 0);
   const graded = legs.length > 0 && legs.every((l) => typeof l.hit === "boolean");
   const legHits = graded ? legs.filter((l) => l.hit).length : null;
 
@@ -148,7 +175,7 @@ function matchBuilder(fx, g, corner) {
     legs,
     legCount: legs.length,
     combinedOdds,
-    combinedProbability: round2(100 / odds),
+    combinedProbability: round2(combinedProb * 100),
     legHits,
     won: graded ? legHits === legs.length : null,
   };
