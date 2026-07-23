@@ -26,14 +26,22 @@ async function fetchResults(date) {
   return res.json();
 }
 
-async function fetchSummary(days) {
-  const res = await fetch(`/api/results/summary?days=${days}&tz=${encodeURIComponent(TZ)}`);
+async function fetchSummary(days, scope) {
+  const region = scope === "sa" ? "&region=sa" : "";
+  const res = await fetch(`/api/results/summary?days=${days}${region}&tz=${encodeURIComponent(TZ)}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Failed (${res.status})`);
   }
   return res.json();
 }
+
+// Backtest scope for the pooled window: every league, or just the CONMEBOL
+// slate (used to sanity-check the South American calibration in isolation).
+const SCOPES = [
+  { key: "all", label: "All leagues" },
+  { key: "sa", label: "🌎 South America" },
+];
 
 // View modes: a single day, or a pooled trailing window. Pooling hundreds of
 // graded calls makes Brier/calibration far less noisy than any one day.
@@ -81,6 +89,7 @@ function gapColor(gap) {
 
 export default function ResultsPage() {
   const [mode, setMode] = useState("day");
+  const [scope, setScope] = useState("all");
   const [date, setDate] = useState(() => yesterday());
   const dateStr = ymd(date);
   const isToday = dateStr === ymd(startOfToday());
@@ -94,8 +103,8 @@ export default function ResultsPage() {
   });
 
   const summaryQuery = useQuery({
-    queryKey: ["results-summary", mode],
-    queryFn: () => fetchSummary(mode),
+    queryKey: ["results-summary", mode, scope],
+    queryFn: () => fetchSummary(mode, scope),
     keepPreviousData: true,
     enabled: !isDay,
     staleTime: 60 * 60 * 1000,
@@ -125,6 +134,20 @@ export default function ResultsPage() {
           </button>
         ))}
       </div>
+
+      {!isDay && (
+        <div style={styles.scopeBar}>
+          {SCOPES.map((s) => (
+            <button
+              key={s.key}
+              style={{ ...styles.scopeBtn, ...(scope === s.key ? styles.scopeBtnActive : {}) }}
+              onClick={() => setScope(s.key)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {isDay && (
         <div style={styles.dateBar}>
@@ -201,6 +224,7 @@ function SummaryView({ query }) {
   const { data, isLoading, isError, error } = query;
   const acc = data?.accuracy;
   const trend = data?.trend || [];
+  const perLeague = data?.perLeague || [];
 
   return (
     <div style={styles.list}>
@@ -221,9 +245,34 @@ function SummaryView({ query }) {
       {!isLoading && !isError && acc && (
         <>
           <AccuracyBanner accuracy={acc} totalMatches={data.totalMatches} />
+          {perLeague.length > 1 && <PerLeagueTable rows={perLeague} />}
           <TrendStrip trend={trend} />
         </>
       )}
+    </div>
+  );
+}
+
+// Per-competition breakdown for a scoped window. Sample size matters most here:
+// a thin league's hit-rate/Brier is noisy, so the match count is shown up front.
+function PerLeagueTable({ rows }) {
+  return (
+    <div style={styles.banner}>
+      <div style={styles.calibTitle}>By competition (most-sampled first)</div>
+      <div style={styles.leagueRows}>
+        {rows.map((r) => (
+          <div key={r.leagueId} style={styles.leagueRow}>
+            <span style={styles.leagueRowName}>{r.league}</span>
+            <span style={styles.leagueRowN}>{r.matches} match{r.matches === 1 ? "" : "es"}</span>
+            <span style={{ ...styles.leagueRowPct, color: pctColor(r.pct) }}>{r.pct}%</span>
+            {r.brier != null && (
+              <span style={{ ...styles.leagueRowBrier, color: brierColor(r.brier) }}>
+                Brier {r.brier.toFixed(3)}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -385,6 +434,9 @@ const styles = {
   modeBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 24px 0" },
   modeBtn: { fontSize: 13, fontWeight: 600, color: "var(--text2)", padding: "6px 16px", borderRadius: 999, background: "var(--bg2)", border: "1px solid var(--border)" },
   modeBtnActive: { background: "var(--accent)", color: "#04121f", border: "1px solid var(--accent)" },
+  scopeBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 24px 0" },
+  scopeBtn: { fontSize: 12, fontWeight: 600, color: "var(--text2)", padding: "5px 14px", borderRadius: 999, background: "var(--bg2)", border: "1px solid var(--border)" },
+  scopeBtnActive: { background: "var(--bg3)", color: "var(--text)", border: "1px solid var(--accent)" },
   loadingNote: { color: "var(--text3)", textAlign: "center", fontSize: 13, padding: "0 20px", lineHeight: 1.5 },
   trendRow: { display: "flex", alignItems: "flex-end", gap: 3, height: 90 },
   trendCol: { flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 },
@@ -420,6 +472,13 @@ const styles = {
   calibBand: { fontSize: 10, color: "var(--text3)" },
   calibHit: { fontSize: 16, fontWeight: 800 },
   calibMeta: { fontSize: 9, color: "var(--text3)" },
+
+  leagueRows: { display: "flex", flexDirection: "column", gap: 4 },
+  leagueRow: { display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 8, background: "var(--bg3)" },
+  leagueRowName: { flex: 1, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  leagueRowN: { fontSize: 11, color: "var(--text3)", flexShrink: 0 },
+  leagueRowPct: { fontSize: 13, fontWeight: 700, width: 44, textAlign: "right", flexShrink: 0 },
+  leagueRowBrier: { fontSize: 11, fontWeight: 600, width: 78, textAlign: "right", flexShrink: 0 },
 
   leagueGroup: { display: "flex", flexDirection: "column", gap: 10 },
   groupHeader: { display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 4px" },
