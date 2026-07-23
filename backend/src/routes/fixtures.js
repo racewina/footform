@@ -30,7 +30,7 @@ import {
   summarizeAccuracy,
 } from "../services/backtest.js";
 import { buildAccumulators, buildLegPool } from "../services/accumulator.js";
-import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB, MARQUEE_LEAGUES } from "../services/vipbet.js";
+import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB, MARQUEE_LEAGUES, SOUTH_AMERICAN_LEAGUES, SA_FLOOR } from "../services/vipbet.js";
 import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { buildEloModel } from "../services/elo.js";
@@ -1129,10 +1129,16 @@ router.get("/vip", async (req, res) => {
     const marqueeLeagues = leagues.filter((g) => MARQUEE_LEAGUES.has(String(g.league.id)));
     const featured = buildVipSlips(marqueeLeagues, cornerMap, 6);
     const slips = buildVipSlips(leagues, cornerMap);
+    // A dedicated South American batch so the region — lower-scoring, so it loses
+    // the interest-ranked race for the general slate's slots — always surfaces,
+    // priced on its own calibration (SA_FLOOR) rather than the European floors.
+    const saLeagues = leagues.filter((g) => SOUTH_AMERICAN_LEAGUES.has(String(g.league.id)));
+    const southAmerica = buildVipSlips(saLeagues, cornerMap, 6, SA_FLOOR);
     await attachBookOddsToSlips(featured, marqueeLeagues);
     await attachBookOddsToSlips(slips, leagues);
+    await attachBookOddsToSlips(southAmerica, saLeagues);
 
-    const result = { date: targetDate, totalMatches, featured, slips };
+    const result = { date: targetDate, totalMatches, featured, southAmerica, slips };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {

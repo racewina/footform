@@ -25,13 +25,18 @@ export default function VipBetPage() {
     queryFn: fetchVip,
   });
 
-  // Two batches: the headline "Top Matches" from the marquee competitions, then
-  // the general slate. The general list drops any match already featured up top
-  // so a headline game never appears twice.
+  // Three batches: the headline "Top Matches" from the marquee competitions, a
+  // dedicated "South America" slate (CONMEBOL, calibrated for its lower-scoring
+  // profile so it isn't crowded out of the general list), then the general slate.
+  // Each later list drops matches already shown above it, so none appears twice.
   const featured = (data?.featured || []).filter((s) => s.legCount > 0);
   const featuredIds = new Set(featured.map((s) => s.matchId));
-  const others = (data?.slips || []).filter((s) => s.legCount > 0 && !featuredIds.has(s.matchId));
-  const hasAny = featured.length > 0 || others.length > 0;
+  const southAmerica = (data?.southAmerica || []).filter(
+    (s) => s.legCount > 0 && !featuredIds.has(s.matchId)
+  );
+  const shownIds = new Set([...featuredIds, ...southAmerica.map((s) => s.matchId)]);
+  const others = (data?.slips || []).filter((s) => s.legCount > 0 && !shownIds.has(s.matchId));
+  const hasAny = featured.length > 0 || southAmerica.length > 0 || others.length > 0;
 
   return (
     <div style={styles.page}>
@@ -64,7 +69,12 @@ export default function VipBetPage() {
         )}
         {featured.map((slip) => <SlipCard key={`f-${slip.matchId}`} slip={slip} />)}
 
-        {featured.length > 0 && others.length > 0 && (
+        {southAmerica.length > 0 && (
+          <SectionTitle icon="🌎" title="South America" subtitle="CONMEBOL · calibrated" />
+        )}
+        {southAmerica.map((slip) => <SlipCard key={`sa-${slip.matchId}`} slip={slip} />)}
+
+        {(featured.length > 0 || southAmerica.length > 0) && others.length > 0 && (
           <SectionTitle icon="💎" title="More VIP Builders" subtitle="Across all leagues" />
         )}
         {others.map((slip) => <SlipCard key={slip.matchId} slip={slip} />)}

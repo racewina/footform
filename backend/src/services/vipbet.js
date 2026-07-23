@@ -12,6 +12,7 @@
 // at once (the flaw that sank the old VIP).
 
 import { jointGoalProbability } from "./predictions.js";
+import { LEAGUES } from "../data/leagues.js";
 
 const round2 = (x) => Math.round(x * 100) / 100;
 
@@ -49,8 +50,28 @@ export function goalWinCandidates(fx) {
 }
 
 const BUILDER_MAX = 8; // up to this many matches listed as builders
-// Per-pick floors: a pick must be at least this likely to make the menu.
+// Per-pick floors: a pick must be at least this likely to make the menu. The
+// default set is tuned to European football; regions with a different scoring
+// profile get their own (see SA_FLOOR).
 const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2: 52, corner3: 40 };
+
+// South American calibration. CONMEBOL football is lower-scoring and more
+// draw-prone than Europe but with a markedly stronger home advantage, so the
+// global floors mis-serve it two ways: goal markets (over 2.5, BTTS, 2+) fire
+// too readily on the model's European-tuned confidence, while genuine home
+// favourites — the region's real edge — are held back. SA_FLOOR leans into the
+// result/home-scoring markets (lower win + score1 floors) and demands more of
+// the goals markets (higher over25/btts/twoPlus floors) so the section surfaces
+// the picks the SA game state actually supports, not speculative goal legs.
+export const SA_FLOOR = { win: 47, score1: 60, twoPlus: 54, over25: 56, btts: 59, corner2: 52, corner3: 40 };
+
+// Every configured South American competition, derived from the league table by
+// country so it tracks additions automatically. Covers the domestic pyramids
+// (Brazil, Argentina, Ecuador, Bolivia, Uruguay) plus the two CONMEBOL cups.
+const SA_COUNTRIES = new Set(["Brazil", "Argentina", "Ecuador", "Bolivia", "Uruguay", "South America"]);
+export const SOUTH_AMERICAN_LEAGUES = new Set(
+  LEAGUES.filter((l) => SA_COUNTRIES.has(l.country)).map((l) => l.id)
+);
 
 // Some picks logically CONTAIN others, so multiplying all their prices would
 // count the same outcome twice and inflate the combined odds. Given the set of
@@ -86,7 +107,7 @@ function priceableKeys(keys) {
 // BOTH teams — the favourite to win, either side to score / score 2+, over 2.5,
 // both teams to score, and first-half corners for the stronger side. Returns null
 // when fewer than two picks qualify (nothing worth building on).
-function matchBuilder(fx, g, corner) {
+function matchBuilder(fx, g, corner, floors = FLOOR) {
   const p = fx.prediction;
   const m = p?.markets;
   if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) return null;
@@ -100,14 +121,14 @@ function matchBuilder(fx, g, corner) {
   const cTeam = c ? (homeFav ? c.home : c.away) : null;
 
   const cands = [
-    { ok: favWin >= FLOOR.win, marketKey: "winner", market: "Match Result", selection: `${favTeam} to win`, prob: favWin },
-    { ok: m.home1Plus >= FLOOR.score1, marketKey: "home1Plus", market: "Team Goals", selection: `${home} to score`, prob: m.home1Plus },
-    { ok: m.away1Plus >= FLOOR.score1, marketKey: "away1Plus", market: "Team Goals", selection: `${away} to score`, prob: m.away1Plus },
-    { ok: m.home2Plus >= FLOOR.twoPlus, marketKey: "home2Plus", market: "Team Goals", selection: `${home} 2+ goals`, prob: m.home2Plus },
-    { ok: m.away2Plus >= FLOOR.twoPlus, marketKey: "away2Plus", market: "Team Goals", selection: `${away} 2+ goals`, prob: m.away2Plus },
-    { ok: m.over25 >= FLOOR.over25, marketKey: "over25", market: "Total Goals", selection: "Over 2.5 goals", prob: m.over25 },
-    { ok: m.btts >= FLOOR.btts, marketKey: "btts", market: "BTTS", selection: "Both teams to score", prob: m.btts },
-    cTeam && { ok: cTeam.fh2Plus >= FLOOR.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
+    { ok: favWin >= floors.win, marketKey: "winner", market: "Match Result", selection: `${favTeam} to win`, prob: favWin },
+    { ok: m.home1Plus >= floors.score1, marketKey: "home1Plus", market: "Team Goals", selection: `${home} to score`, prob: m.home1Plus },
+    { ok: m.away1Plus >= floors.score1, marketKey: "away1Plus", market: "Team Goals", selection: `${away} to score`, prob: m.away1Plus },
+    { ok: m.home2Plus >= floors.twoPlus, marketKey: "home2Plus", market: "Team Goals", selection: `${home} 2+ goals`, prob: m.home2Plus },
+    { ok: m.away2Plus >= floors.twoPlus, marketKey: "away2Plus", market: "Team Goals", selection: `${away} 2+ goals`, prob: m.away2Plus },
+    { ok: m.over25 >= floors.over25, marketKey: "over25", market: "Total Goals", selection: "Over 2.5 goals", prob: m.over25 },
+    { ok: m.btts >= floors.btts, marketKey: "btts", market: "BTTS", selection: "Both teams to score", prob: m.btts },
+    cTeam && { ok: cTeam.fh2Plus >= floors.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
   ].filter((x) => x && x.ok && typeof x.prob === "number");
 
   // Drop picks that are logically implied by others (e.g. BTTS when both teams
@@ -209,13 +230,14 @@ export const MARQUEE_LEAGUES = new Set([
 // The day's match bet-builders, most appealing first. (cornerMap optional; the
 // record path passes none, so those builders carry no corner picks.) `maxSlips`
 // caps the list — the general slate uses the default, the Top Matches batch a
-// smaller number.
-export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX) {
+// smaller number. `floors` overrides the per-pick confidence gates for regions
+// with a different scoring profile (the South America batch passes SA_FLOOR).
+export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX, floors = FLOOR) {
   const builders = [];
   for (const g of leagues || []) {
     if (g.league?.friendly) continue; // friendlies are too unpredictable for VIP slips
     for (const fx of g.fixtures || []) {
-      const b = matchBuilder(fx, g, cornerMap[fx.id] || null);
+      const b = matchBuilder(fx, g, cornerMap[fx.id] || null, floors);
       if (b) builders.push(b);
     }
   }
