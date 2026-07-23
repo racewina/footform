@@ -716,6 +716,23 @@ router.get("/results/summary", async (req, res) => {
   const tz = req.query.tz;
   const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 30);
 
+  // Optional scope filter so the backtest can isolate a subset of leagues —
+  // e.g. `?region=sa` for the CONMEBOL calibration check, or `?leagues=71,128`
+  // for an explicit list. Unrecognised/empty scope falls back to every league.
+  const region = String(req.query.region || "").toLowerCase();
+  const leagueIds = String(req.query.leagues || "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  let scoped = LEAGUES;
+  let scope = "all";
+  if (leagueIds.length) {
+    const want = new Set(leagueIds);
+    scoped = LEAGUES.filter((l) => want.has(l.id));
+    scope = `leagues:${[...want].sort().join(",")}`;
+  } else if (region === "sa" || region === "southamerica" || region === "conmebol") {
+    scoped = LEAGUES.filter((l) => SOUTH_AMERICAN_LEAGUES.has(l.id));
+    scope = "sa";
+  }
+
   // Build the set of in-window day strings, ending yesterday.
   const dates = [];
   const dateSet = new Set();
@@ -728,24 +745,42 @@ router.get("/results/summary", async (req, res) => {
   }
   dates.sort(); // ascending for the trend
 
-  const cacheKey = `results-summary:${days}:${dates[0]}:${dates[dates.length - 1]}:${tz || "server"}`;
+  const cacheKey = `results-summary:${scope}:${days}:${dates[0]}:${dates[dates.length - 1]}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
 
   try {
     // Sequential per-league so we stay under the upstream rate gate; each
-    // league fetches its season feed once.
+    // league fetches its season feed once. Tag each window with its league so
+    // the response can break accuracy down per competition (sample sizes matter
+    // when reading a calibration table for a thin regional slate).
     const windows = [];
-    for (const l of LEAGUES) {
+    for (const l of scoped) {
       const w = await buildLeagueWindow(l.id, dateSet, tz).catch((e) => {
         console.error(`[results-summary] ${l.id}: ${e.message}`);
         return null;
       });
-      if (w) windows.push(w);
+      if (w) windows.push({ leagueId: l.id, leagueName: l.name, ...w });
     }
 
     const allGrades = windows.flatMap((w) => w.grades);
     const accuracy = allGrades.length ? summarizeAccuracy(allGrades) : null;
+
+    // Per-league breakdown: match count + overall hit-rate/Brier per competition,
+    // most-sampled first. Lets us see which SA leagues actually carry the signal.
+    const perLeague = windows
+      .filter((w) => w.grades.length)
+      .map((w) => {
+        const s = summarizeAccuracy(w.grades);
+        return {
+          leagueId: w.leagueId,
+          league: w.leagueName,
+          matches: w.grades.length,
+          pct: s.overall.pct,
+          brier: s.overall.brier,
+        };
+      })
+      .sort((a, b) => b.matches - a.matches);
 
     // Per-day trend: hit-rate + Brier for each day in the window.
     const byDay = {};
@@ -766,7 +801,7 @@ router.get("/results/summary", async (req, res) => {
     });
 
     const totalMatches = allGrades.length;
-    const result = { window: { days, from: dates[0], to: dates[dates.length - 1] }, totalMatches, accuracy, trend };
+    const result = { scope, window: { days, from: dates[0], to: dates[dates.length - 1] }, totalMatches, accuracy, perLeague, trend };
     cacheSet(cacheKey, result, TTL.TEAM_FORM);
     res.json({ ...result, fromCache: false });
   } catch (err) {
