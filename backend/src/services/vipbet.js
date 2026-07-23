@@ -36,6 +36,36 @@ const BUILDER_MAX = 8; // up to this many matches listed as builders
 // Per-pick floors: a pick must be at least this likely to make the menu.
 const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2: 52, corner3: 40 };
 
+// Some picks logically CONTAIN others, so multiplying all their prices would
+// count the same outcome twice and inflate the combined odds. Given the set of
+// qualifying pick keys, drop the redundant (implied) one in each overlap and
+// return the keys that should actually be priced:
+//   • scoring 2+ implies scoring 1+                → drop the 1+ leg.
+//   • BTTS ≡ (home scores) AND (away scores). If both team-to-score legs are
+//     already in, BTTS adds nothing → drop BTTS. If only one side is present,
+//     BTTS implies that 1+ leg → drop the 1+ leg and keep BTTS (the correct
+//     joint the model already prices with its scoreline correlation).
+//   • Over 2.5 is guaranteed once the kept goal legs already force 3+ goals
+//     (e.g. a 2+ leg on one side and any scoring leg on the other) → drop it.
+function priceableKeys(keys) {
+  const s = new Set(keys);
+  if (s.has("home2Plus")) s.delete("home1Plus");
+  if (s.has("away2Plus")) s.delete("away1Plus");
+
+  if (s.has("btts")) {
+    const homeScores = s.has("home1Plus") || s.has("home2Plus");
+    const awayScores = s.has("away1Plus") || s.has("away2Plus");
+    if (homeScores && awayScores) s.delete("btts");
+    else { s.delete("home1Plus"); s.delete("away1Plus"); }
+  }
+
+  const minHome = s.has("home2Plus") ? 2 : (s.has("home1Plus") || s.has("btts")) ? 1 : 0;
+  const minAway = s.has("away2Plus") ? 2 : (s.has("away1Plus") || s.has("btts")) ? 1 : 0;
+  if (s.has("over25") && minHome + minAway >= 3) s.delete("over25");
+
+  return s;
+}
+
 // A whole-match bet-builder: every correlated pick the model rates likely across
 // BOTH teams — the favourite to win, either side to score / score 2+, over 2.5,
 // both teams to score, and first-half corners for the stronger side. Returns null
@@ -64,9 +94,14 @@ function matchBuilder(fx, g, corner) {
     cTeam && { ok: cTeam.fh2Plus >= FLOOR.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
   ].filter((x) => x && x.ok && typeof x.prob === "number");
 
-  if (cands.length < 2) return null;
+  // Drop picks that are logically implied by others (e.g. BTTS when both teams
+  // are already backed to score), so overlapping markets aren't priced twice.
+  const keep = priceableKeys(cands.map((c) => c.marketKey));
+  const picks = cands.filter((c) => keep.has(c.marketKey));
 
-  const legs = cands.map((cand) => {
+  if (picks.length < 2) return null;
+
+  const legs = picks.map((cand) => {
     const leg = {
       matchId: fx.id,
       home: fx.homeTeam?.name,
