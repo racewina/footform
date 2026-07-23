@@ -5,7 +5,7 @@
 //   • /assets/* (hashed) → cache-first (those files are immutable per build)
 //   • cross-origin (team logos, an absolute API) → left alone
 // Bumping CACHE on each meaningful change drops the old cache on activate.
-const CACHE = "footform-v2";
+const CACHE = "footform-v3";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
