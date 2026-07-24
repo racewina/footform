@@ -94,7 +94,7 @@ function SectionTitle({ icon, title, subtitle }) {
 }
 
 function SlipCard({ slip }) {
-  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount, stats } = slip;
+  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount } = slip;
   const ko = kickoff
     ? new Date(kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "--:--";
@@ -117,31 +117,6 @@ function SlipCard({ slip }) {
       </div>
 
       {legs.map((leg) => <Leg key={leg.marketKey} leg={leg} />)}
-
-      <MatchStats stats={stats} home={home} away={away} />
-    </div>
-  );
-}
-
-// The model's standalone single-market percentages for the match, shown for
-// reference below the priced legs. These aren't part of the combined price —
-// they're just the marginal chances (uncorrelated).
-function MatchStats({ stats, home, away }) {
-  if (!stats) return null;
-  const items = [
-    { label: "Both to score", prob: stats.btts },
-    { label: `${home} to score`, prob: stats.homeScore },
-    { label: `${away} to score`, prob: stats.awayScore },
-  ].filter((s) => typeof s.prob === "number");
-  if (items.length === 0) return null;
-  return (
-    <div style={styles.stats}>
-      {items.map((s) => (
-        <div key={s.label} style={styles.stat}>
-          <span style={styles.statLabel}>{s.label}</span>
-          <span style={{ ...styles.statProb, color: oddsColor(s.prob) }}>{s.prob}%</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -210,9 +185,4 @@ const styles = {
   legNums: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 },
   legProb: { fontSize: 14, fontWeight: 700 },
   legOdds: { fontSize: 12, color: "var(--text2)" },
-
-  stats: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 16px", background: "var(--bg3)" },
-  stat: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 },
-  statLabel: { color: "var(--text3)" },
-  statProb: { fontWeight: 700 },
 };

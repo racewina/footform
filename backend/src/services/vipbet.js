@@ -11,24 +11,9 @@
 // is a real edge, whereas combining different matches just needs two dominations
 // at once (the flaw that sank the old VIP).
 
-import { jointGoalProbability } from "./predictions.js";
 import { LEAGUES } from "../data/leagues.js";
 
 const round2 = (x) => Math.round(x * 100) / 100;
-
-// Recover the model's per-side expected goals from the prediction's public
-// marginals: the split comes from each side's 1+ probability, rescaled so the
-// pair sums to the model's expected-goals total. Enough to rebuild the scoreline
-// grid for correlation-correct combined pricing, without exposing per-side
-// expected goals as a new API field.
-function reconstructLambdas(m) {
-  const clampP = (p) => Math.min(0.995, Math.max(0.02, (p ?? 0) / 100));
-  const lh = -Math.log(1 - clampP(m.home1Plus));
-  const la = -Math.log(1 - clampP(m.away1Plus));
-  const total = typeof m.expectedGoals === "number" && m.expectedGoals > 0 ? m.expectedGoals : lh + la;
-  const scale = lh + la > 0 ? total / (lh + la) : 1;
-  return { lambdaHome: lh * scale, lambdaAway: la * scale };
-}
 
 // Kept for the route's corner-shortlist ranking (which fixtures deserve a corner
 // fetch). The goal/result candidate menu for a fixture.
@@ -80,10 +65,8 @@ export const SOUTH_AMERICAN_LEAGUES = new Set(
 //   • scoring 2+ implies scoring 1+                → drop the 1+ leg.
 //   • BTTS ≡ (home scores) AND (away scores). If both team-to-score legs are
 //     already in, BTTS adds nothing → drop BTTS. If only one side is present,
-//     BTTS implies that 1+ leg → drop the 1+ leg and keep BTTS (the correct
-//     joint the model already prices with its scoreline correlation).
-//   • Over 2.5 is guaranteed once the kept goal legs already force 3+ goals
-//     (e.g. a 2+ leg on one side and any scoring leg on the other) → drop it.
+//     BTTS implies that 1+ leg → drop the 1+ leg and keep BTTS.
+//   • Over 2.5 is guaranteed once the kept goal legs already force 3+ goals → drop it.
 function priceableKeys(keys) {
   const s = new Set(keys);
   if (s.has("home2Plus")) s.delete("home1Plus");
@@ -131,8 +114,8 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
     cTeam && { ok: cTeam.fh2Plus >= floors.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
   ].filter((x) => x && x.ok && typeof x.prob === "number");
 
-  // Drop picks that are logically implied by others (e.g. BTTS when both teams
-  // are already backed to score), so overlapping markets aren't priced twice.
+  // Drop picks logically implied by others (e.g. BTTS when both teams are already
+  // backed to score), so overlapping markets aren't priced twice in the product.
   const keep = priceableKeys(cands.map((c) => c.marketKey));
   const picks = cands.filter((c) => keep.has(c.marketKey));
 
@@ -159,20 +142,9 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
     return leg;
   });
 
-  // Correlation-correct combined price. The goal/result legs all live on ONE
-  // scoreline distribution, so their true combined probability is the joint over
-  // that grid — not the product of marginals, which assumes independence and
-  // misprices correlated picks (and, as a bonus, absorbs any nested overlap like
-  // BTTS with both team-to-score). The corner leg is a separate market, so its
-  // marginal is multiplied in independently.
-  const GRID_KEYS = new Set(["winner", "home1Plus", "home2Plus", "away1Plus", "away2Plus", "over25", "btts"]);
-  const gridKeys = picks.map((c) => c.marketKey).filter((key) => GRID_KEYS.has(key));
-  const { lambdaHome, lambdaAway } = reconstructLambdas(m);
-  let combinedProb = gridKeys.length
-    ? jointGoalProbability(lambdaHome, lambdaAway, gridKeys, homeFav ? "home" : "away")
-    : 1;
-  for (const c of picks) if (!GRID_KEYS.has(c.marketKey)) combinedProb *= c.prob / 100;
-  const combinedOdds = round2(combinedProb > 0 ? 1 / combinedProb : 0);
+  let odds = 1;
+  for (const l of legs) odds *= l.odds;
+  const combinedOdds = round2(odds);
   const graded = legs.length > 0 && legs.every((l) => typeof l.hit === "boolean");
   const legHits = graded ? legs.filter((l) => l.hit).length : null;
 
@@ -193,19 +165,10 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
     leagueFlag: g.league?.flag,
     kickoff: fx.startTimestamp,
     interest,
-    // Standalone marginal percentages surfaced for reference on every card,
-    // regardless of whether the leg qualified or was deduped out of the priced
-    // combo — these are the model's raw single-market probabilities, not folded
-    // into the correlation-correct combined price.
-    stats: {
-      btts: typeof m.btts === "number" ? m.btts : null,
-      homeScore: typeof m.home1Plus === "number" ? m.home1Plus : null,
-      awayScore: typeof m.away1Plus === "number" ? m.away1Plus : null,
-    },
     legs,
     legCount: legs.length,
     combinedOdds,
-    combinedProbability: round2(combinedProb * 100),
+    combinedProbability: round2(100 / odds),
     legHits,
     won: graded ? legHits === legs.length : null,
   };
@@ -230,8 +193,7 @@ export const MARQUEE_LEAGUES = new Set([
 // The day's match bet-builders, most appealing first. (cornerMap optional; the
 // record path passes none, so those builders carry no corner picks.) `maxSlips`
 // caps the list — the general slate uses the default, the Top Matches batch a
-// smaller number. `floors` overrides the per-pick confidence gates for regions
-// with a different scoring profile (the South America batch passes SA_FLOOR).
+// smaller number.
 export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX, floors = FLOOR) {
   const builders = [];
   for (const g of leagues || []) {
