@@ -302,6 +302,17 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   // Already-selected leagues stay listed even when they no longer qualify:
   // hiding a checked box would leave a filter active with no way to switch it off.
   const inCurrentView = (fx) => passWithin(fx) && (effStatus === "all" || statusOf(fx) === effStatus);
+
+  // "Serbia Super Liga" — the flag alone isn't enough to tell leagues apart, so
+  // prefix the country. Skipped when the league name already carries it
+  // (e.g. "Argentina Primera C"), which would otherwise read twice.
+  const leagueLabel = (l) =>
+    !l.country || l.name.toLowerCase().startsWith(l.country.toLowerCase())
+      ? l.name
+      : `${l.country} ${l.name}`;
+
+  // Leagues offered in the filter dropdown, sorted alphabetically by their shown
+  // label (country-prefixed) rather than left in fixture-group order.
   const dayLeagues = isTodayView
     ? groups
         .filter((g) => g.fixtures.some(inCurrentView) || leagueFilter.includes(String(g.league.id)))
@@ -311,15 +322,8 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
           flag: g.league.flag,
           country: g.league.country,
         }))
+        .sort((a, b) => leagueLabel(a).localeCompare(leagueLabel(b)))
     : [];
-
-  // "Serbia Super Liga" — the flag alone isn't enough to tell leagues apart, so
-  // prefix the country. Skipped when the league name already carries it
-  // (e.g. "Argentina Primera C"), which would otherwise read twice.
-  const leagueLabel = (l) =>
-    !l.country || l.name.toLowerCase().startsWith(l.country.toLowerCase())
-      ? l.name
-      : `${l.country} ${l.name}`;
 
   // Summary label for the multi-select button.
   const leagueSummary =
