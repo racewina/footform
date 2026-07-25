@@ -53,6 +53,7 @@ export const LEAGUES = [
   { id: "332", name: "Super Liga", country: "Slovakia", tier: 1, flag: "🇸🇰" },
   { id: "210", name: "HNL", country: "Croatia", tier: 1, flag: "🇭🇷" },
   { id: "172", name: "Parva Liga", country: "Bulgaria", tier: 1, flag: "🇧🇬" },
+  { id: "197", name: "Super League 1", country: "Greece", tier: 1, flag: "🇬🇷" },
   { id: "71", name: "Brasileirão Série A", country: "Brazil", tier: 1, flag: "🇧🇷" },
   { id: "72", name: "Brasileirão Série B", country: "Brazil", tier: 2, flag: "🇧🇷" },
   { id: "75", name: "Brasileirão Série C", country: "Brazil", tier: 3, flag: "🇧🇷" },

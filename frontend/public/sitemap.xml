@@ -324,4 +324,8 @@
     <loc>https://football-app-six.vercel.app/league/south-america-conmebol-sudamericana</loc>
     <changefreq>daily</changefreq>
   </url>
+  <url>
+    <loc>https://football-app-six.vercel.app/league/greece-super-league-1</loc>
+    <changefreq>daily</changefreq>
+  </url>
 </urlset>
