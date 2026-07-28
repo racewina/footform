@@ -201,6 +201,21 @@ export async function fetchTeamLastMatches(teamId, page = 0) {
   return adaptFixtures(json);
 }
 
+// Resolve a free-text team name to a team { id, name, country, logo }. Used by
+// the /analyze entry point so callers can pass "Real Madrid" instead of an id.
+// Prefers an exact (case-insensitive) name match, else the first result.
+export async function fetchTeamByName(name) {
+  const q = String(name || "").trim();
+  if (q.length < 3) return null; // API-Football requires >=3 chars to search
+  const json = await request(`/teams?search=${encodeURIComponent(q)}`);
+  const rows = Array.isArray(json?.response) ? json.response : [];
+  if (!rows.length) return null;
+  const lc = q.toLowerCase();
+  const exact = rows.find((r) => (r.team?.name || "").toLowerCase() === lc);
+  const pick = (exact || rows[0]).team;
+  return pick ? { id: pick.id, name: pick.name, country: pick.country || null, logo: pick.logo || null } : null;
+}
+
 // --- Player props (lineups + per-player season stats) ----------------------
 // These power the World Cup player-prop markets (anytime scorer / to commit a
 // foul / to be fouled / player tackle). They are NOT used by the matchday or

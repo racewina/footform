@@ -113,6 +113,29 @@ export function jointGoalProbability(lambdaHome, lambdaAway, legKeys, favSide) {
   return sum > 0 ? hit / sum : 0;
 }
 
+// The N most likely exact scorelines off the same Dixon–Coles grid, each as
+// { home, away, prob } with prob in 0..1 (normalised). For presenting the
+// model's headline scoreline scenarios alongside the market probabilities.
+export function topScorelines(lambdaHome, lambdaAway, n = 5) {
+  const ph = [], pa = [];
+  for (let g = 0; g <= MAX_GOALS; g++) { ph[g] = poissonP(g, lambdaHome); pa[g] = poissonP(g, lambdaAway); }
+
+  let sum = 0;
+  const cells = [];
+  for (let i = 0; i <= MAX_GOALS; i++) {
+    for (let j = 0; j <= MAX_GOALS; j++) {
+      const p = ph[i] * pa[j] * tau(i, j, lambdaHome, lambdaAway, RHO);
+      sum += p;
+      cells.push({ home: i, away: j, p });
+    }
+  }
+
+  return cells
+    .sort((a, b) => b.p - a.p)
+    .slice(0, Math.max(1, n))
+    .map((c) => ({ home: c.home, away: c.away, prob: sum > 0 ? +(c.p / sum).toFixed(4) : 0 }));
+}
+
 // Build the full P(i,j) scoreline grid for the two expected-goal rates and read
 // every market off it, guaranteeing match-result and goal markets agree.
 function marketsFromGoals(lambdaHome, lambdaAway) {
