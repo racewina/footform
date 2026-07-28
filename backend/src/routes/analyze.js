@@ -20,6 +20,25 @@ import { cacheGet, cacheSet, TTL } from "../services/cache.js";
 
 const router = express.Router();
 
+// Access gate. This endpoint is the published agent's data source, so it isn't
+// meant to be openly callable — the agent presents a shared key and everyone
+// else is refused. The key lives in ANALYZE_API_KEY (Vercel env), never in code.
+// Accepts it as `Authorization: Bearer <key>`, an `x-api-key` header, or `?key=`.
+// Fails CLOSED: if no key is configured on the server, the endpoint is disabled.
+function requireKey(req, res, next) {
+  const configured = process.env.ANALYZE_API_KEY;
+  if (!configured) return res.status(503).json({ error: "Analyze API is not configured." });
+  const provided =
+    (req.get("authorization") || "").replace(/^Bearer\s+/i, "").trim() ||
+    req.get("x-api-key") ||
+    req.query.key ||
+    "";
+  if (provided !== configured) {
+    return res.status(401).json({ error: "Unauthorized — a valid API key is required." });
+  }
+  next();
+}
+
 // Tighter than the general API limiter: this endpoint fans out to several
 // upstream calls per request, and it's the one exposed to third-party agents.
 const analyzeLimiter = rateLimit({
@@ -103,7 +122,7 @@ async function leagueContext(homeId, awayId) {
   };
 }
 
-router.get("/analyze", analyzeLimiter, async (req, res) => {
+router.get("/analyze", requireKey, analyzeLimiter, async (req, res) => {
   const home = String(req.query.home || "").trim();
   const away = String(req.query.away || "").trim();
   if (!home || !away) {
