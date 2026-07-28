@@ -216,6 +216,20 @@ export async function fetchTeamByName(name) {
   return pick ? { id: pick.id, name: pick.name, country: pick.country || null, logo: pick.logo || null } : null;
 }
 
+// The competitions a team plays this season. Used to find the shared domestic
+// league of a free-text matchup, so /analyze can build that league's Elo + goal
+// baselines and reach full model quality. Returns [{ id, name, type, country }].
+export async function fetchTeamLeagues(teamId) {
+  const json = await request(`/leagues?team=${teamId}&current=true`);
+  const rows = Array.isArray(json?.response) ? json.response : [];
+  return rows.map((r) => ({
+    id: String(r.league?.id),
+    name: r.league?.name,
+    type: r.league?.type,
+    country: r.country?.name || null,
+  }));
+}
+
 // --- Player props (lineups + per-player season stats) ----------------------
 // These power the World Cup player-prop markets (anytime scorer / to commit a
 // foul / to be fouled / player tackle). They are NOT used by the matchday or

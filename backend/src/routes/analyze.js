@@ -13,8 +13,9 @@
 
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { fetchTeamByName, fetchTeamLastMatches } from "../services/apifootball.js";
-import { computePrediction, parseFormFromEvents, topScorelines, FORM_HALF_LIFE_DAYS } from "../services/predictions.js";
+import { fetchTeamByName, fetchTeamLastMatches, fetchTeamLeagues, fetchLeagueSeason, fetchPastEvents } from "../services/apifootball.js";
+import { computePrediction, parseFormFromEvents, leagueBaselines, topScorelines, FORM_HALF_LIFE_DAYS } from "../services/predictions.js";
+import { buildEloModel } from "../services/elo.js";
 import { cacheGet, cacheSet, TTL } from "../services/cache.js";
 
 const router = express.Router();
@@ -53,6 +54,55 @@ async function resolveTeam(name) {
   return team;
 }
 
+// The domestic leagues a team plays this season (cached a week — stable within a
+// season). Only "League"-type competitions, since Elo is a within-league rating.
+async function teamLeagues(teamId) {
+  const key = `az-team-leagues:${teamId}`;
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  const leagues = (await fetchTeamLeagues(teamId).catch(() => [])).filter((l) => l.type === "League");
+  cacheSet(key, leagues, 7 * 24 * 60 * 60);
+  return leagues;
+}
+
+// Whole-season events for a league, for building Elo + baselines. Cached 6h.
+async function leagueEvents(leagueId) {
+  const sKey = `az-season:${leagueId}`;
+  let seasonId = cacheGet(sKey);
+  if (!seasonId) {
+    seasonId = (await fetchLeagueSeason(leagueId))?.seasons?.[0]?.id ?? null;
+    if (seasonId) cacheSet(sKey, seasonId, TTL.TEAM_FORM);
+  }
+  if (!seasonId) return [];
+  const eKey = `az-events:${leagueId}:${seasonId}`;
+  const hit = cacheGet(eKey);
+  if (hit) return hit;
+  const events = (await fetchPastEvents(leagueId, seasonId).catch(() => ({ events: [] }))).events || [];
+  cacheSet(eKey, events, TTL.TEAM_FORM);
+  return events;
+}
+
+// Full-model context for a matchup when both teams share a domestic league:
+// that league's Elo ratings (current strength) + goal baselines, exactly what
+// the app blends into its fixture predictions. Returns null when there's no
+// shared league (cross-division / cross-country hypotheticals) → form-only.
+async function leagueContext(homeId, awayId) {
+  const [hl, al] = await Promise.all([teamLeagues(homeId), teamLeagues(awayId)]);
+  const shared = hl.find((h) => al.some((a) => a.id === h.id));
+  if (!shared) return null;
+
+  const events = await leagueEvents(shared.id);
+  if (events.length < 30) return null; // too thin for a trustworthy Elo/baseline
+
+  const elo = buildEloModel(events);
+  const baselines = leagueBaselines(events);
+  return {
+    league: shared.name,
+    baselines,
+    eloRatings: { home: elo.current(homeId), away: elo.current(awayId) },
+  };
+}
+
 router.get("/analyze", analyzeLimiter, async (req, res) => {
   const home = String(req.query.home || "").trim();
   const away = String(req.query.away || "").trim();
@@ -87,9 +137,15 @@ router.get("/analyze", analyzeLimiter, async (req, res) => {
       });
     }
 
-    // No league context for a free-text matchup, so no Elo/baselines blend — the
-    // form model with recency decay, same as the app's on-demand prediction path.
-    const p = computePrediction(homeForm, awayForm, null, null, decayFor(Math.floor(Date.now() / 1000)));
+    // Full model when both teams share a domestic league (Elo + goal baselines,
+    // same as the app's fixture predictions); form-only fallback otherwise.
+    const ctx = await leagueContext(homeTeam.id, awayTeam.id).catch(() => null);
+    const p = computePrediction(
+      homeForm, awayForm,
+      ctx?.eloRatings || null,
+      ctx?.baselines || null,
+      decayFor(Math.floor(Date.now() / 1000)),
+    );
     const m = p.markets || {};
 
     // Model's headline scoreline scenarios (top 5), labelled with the team names.
@@ -114,7 +170,11 @@ router.get("/analyze", analyzeLimiter, async (req, res) => {
       },
       confidence: p.confidence,
       form: { home: p.homeForm, away: p.awayForm },
-      note: "Model-based estimates from recent form. Football analysis only — not betting advice.",
+      context: {
+        league: ctx?.league || null,
+        model: ctx ? "form + season strength + league baselines" : "recent form only",
+      },
+      note: "Model-based estimates. Football analysis only — not betting advice.",
     };
 
     cacheSet(cacheKey, result, TTL.TEAM_FORM);
