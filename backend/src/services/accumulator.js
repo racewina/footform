@@ -11,6 +11,11 @@
 
 const round2 = (x) => Math.round(x * 100) / 100;
 
+// Minimum fair odds for a leg to be eligible. Anything shorter (a selection the
+// model rates > ~86% likely) barely lifts the combined odds yet still adds a
+// point of failure, so it's excluded — every leg must be a meaningful multiplier.
+const MIN_LEG_ODDS = 1.16;
+
 // Candidate selections for a fixture — each the safer side of its market.
 function fixtureCandidates(fx) {
   const m = fx.prediction?.markets;
@@ -33,7 +38,9 @@ function fixtureCandidates(fx) {
     { marketKey: "over25", market: "Total Goals", ...sided(m.over25, "Over 2.5 goals", "Under 2.5 goals") },
     { marketKey: "btts", market: "BTTS", ...sided(m.btts, "Both teams to score", "Both teams not to score") },
   ];
-  return cands.filter((c) => c.prob > 0 && c.prob < 100);
+  // Exclude selections shorter than the odds floor (too-safe legs add risk
+  // without meaningful odds); a fixture with no eligible market drops out.
+  return cands.filter((c) => c.prob > 0 && c.prob < 100 && round2(100 / c.prob) >= MIN_LEG_ODDS);
 }
 
 // One leg per fixture: the market the model is most confident in.
