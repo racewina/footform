@@ -14,6 +14,8 @@ import {
   fetchFixtureInjuries,
   fetchLiveFixtures,
   fetchFixturesByDate,
+  fetchTeamByName,
+  fetchHeadToHead,
 } from "../services/apifootball.js";
 import { computePrediction, parseFormFromEvents, blendPrediction, leagueBaselines, FORM_HALF_LIFE_DAYS } from "../services/predictions.js";
 
@@ -219,6 +221,37 @@ async function getProjectedXI(teamId, season) {
   return xi;
 }
 
+// The team's most recent ACTUAL starting XI — from the lineup of their last
+// finished match that has one in the feed. The reliable fallback when there's no
+// official lineup for THIS match yet and the current-season squad-by-minutes is
+// empty (a national team at the World Cup, or a club in preseason): eleven real
+// players who genuinely started, carrying the pitch grid so the positional foul
+// model still applies. Cached per team. Returns null if none of the recent
+// matches has a lineup.
+async function getTeamLastStartXI(teamId) {
+  const cacheKey = `last-xi:${teamId}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const events = await getTeamEvents(teamId).catch(() => []);
+  const recent = [...events]
+    .filter((e) => e.status?.type === "finished" && e.id)
+    .sort((a, b) => (b.startTimestamp ?? 0) - (a.startTimestamp ?? 0))
+    .slice(0, 5); // the very latest match may predate the lineup feed; try a few back
+
+  let out = null;
+  for (const e of recent) {
+    const lineups = await fetchFixtureLineups(e.id).catch(() => []);
+    const side = lineups.find((l) => l.teamId === teamId);
+    if (side && side.startXI?.length) {
+      out = { formation: side.formation, startXI: side.startXI };
+      break;
+    }
+  }
+  cacheSet(cacheKey, out, TTL.TEAM_FORM);
+  return out;
+}
+
 // Per-team corner counts for one finished fixture. Finished-match stats never
 // change, so this is cached aggressively and reused across every team that
 // played in the fixture and across days.
@@ -280,8 +313,9 @@ async function getFixtureOdds(fixtureId) {
 // for the form TTL (injury news moves slowly). Returns { home:[], away:[] } of
 // players who are definitely OUT ("Missing Fixture"); doubtful players are kept
 // separately under `.doubtful`.
-// Raw injury rows for a fixture (with player ids), cached. Used both to display
-// the unavailable list and to drop those players from a projected XI.
+// Raw injury rows for a fixture (with player ids), cached. Used internally to
+// drop injured/suspended players from a projected XI — the injury list itself is
+// NOT surfaced on fixtures, only learned from.
 async function getFixtureInjuryRows(fixtureId) {
   const cacheKey = `injuries:${fixtureId}`;
   const cached = cacheGet(cacheKey);
@@ -298,20 +332,6 @@ async function getFixtureOutIds(fixtureId) {
   return new Set(rows.filter((r) => !/quest/i.test(r.type || "")).map((r) => r.playerId));
 }
 
-async function getFixtureInjuries(fixtureId, homeId, awayId) {
-  const rows = await getFixtureInjuryRows(fixtureId);
-  if (!rows.length) return null;
-  const out = { home: [], away: [], doubtful: { home: [], away: [] } };
-  for (const r of rows) {
-    const side = r.teamId === homeId ? "home" : r.teamId === awayId ? "away" : null;
-    if (!side) continue;
-    const entry = { name: r.playerName, reason: r.reason };
-    if (/quest/i.test(r.type || "")) out.doubtful[side].push(entry);
-    else out[side].push(entry);
-  }
-  if (!out.home.length && !out.away.length && !out.doubtful.home.length && !out.doubtful.away.length) return null;
-  return out;
-}
 
 // Decorate each leg of a set of slips with the best bookmaker price for its
 // market, so the UI can show real odds next to the model's fair odds. Fetches
@@ -369,7 +389,7 @@ async function gatherStarters(starters, clubSeason) {
 
 // Turn gathered starters into prop rows, applying any positional foul multiplier
 // (keyed by player id) from foulMatchups().
-function rowsFromStarters(starters, matchups = {}) {
+function rowsFromStarters(starters, matchups = {}, sideOpt = null) {
   return starters.map((p) => {
     const m = matchups[p.id] || null;
     return {
@@ -378,7 +398,13 @@ function rowsFromStarters(starters, matchups = {}) {
       number: p.number,
       pos: p.pos,
       photo: p.photo,
-      props: playerProps(p.stat, { foulMultiplier: m?.foulMultiplier }),
+      props: playerProps(p.stat, {
+        foulMultiplier: m?.foulMultiplier,
+        // Opponent-aware volume adjustment (Event Generator): the player's side
+        // attack level scales shots; the opponent's attack scales GK saves.
+        attackMultiplier: sideOpt?.attackMultiplier,
+        savesMultiplier: sideOpt?.savesMultiplier,
+      }),
       // Only the opponent name ships — the multiplier/dribbles metrics that
       // reveal the model stay server-side.
       foulMatchup: m ? { opponent: m.opponent } : null,
@@ -969,10 +995,10 @@ router.get("/today", async (req, res) => {
 
   try {
     // Cold cross-league builds are dominated by the per-league season/Elo setup,
-    // so building the many leagues with NO match on this day is pure waste (and,
-    // at the plan's rate cap, an all-league build overruns the function timeout).
-    // One cheap fixtures-by-date pass (the same call /counts uses) tells us which
-    // leagues actually play, so we build only those.
+    // so building the many leagues with NO match on this day is pure waste. One
+    // cheap fixtures-by-date pass (the same call /counts uses) tells us which
+    // leagues actually play, so we build only those. Falls back to ALL leagues if
+    // the probe fails, so a transient API blip can never blank the day.
     const shiftYmd = (ymd, days) => {
       const [y, mo, d] = ymd.split("-").map(Number);
       const dt = new Date(Date.UTC(y, mo - 1, d));
@@ -985,7 +1011,8 @@ router.get("/today", async (req, res) => {
     );
     // Use the active-league filter as long as a probe succeeded — they're cheap
     // first-calls that essentially always do. Only if ALL probes fail do we fall
-    // back to building every league (which is what would exceed the timeout).
+    // back to building every league, and that all-league build is exactly what
+    // would exceed the function timeout, so we avoid it whenever we can.
     let leaguesToBuild = LEAGUES;
     if (probes.some((pr) => pr.ok)) {
       const active = new Set();
@@ -1062,6 +1089,13 @@ router.get("/accumulators", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Blend Bets: accumulators (3-5x / 7-10x) that fuse the Safe Bets + VIP market
+// menus and are gated on REAL bookmaker odds >= 1.20 per leg (not the model's
+// fair price). Only fixtures with a published price qualify, so this lazily
+// fetches odds for a confidence-ranked shortlist to bound the upstream fan-out.
+const BLEND_MIN_BOOK = 1.2;
+const BLEND_SHORTLIST = 40;
 
 // Track record for the "safe bets" slips: rebuild the same accumulators from a
 // past day's FINISHED matches (predictions reconstructed from pre-kickoff form)
@@ -1184,64 +1218,6 @@ router.get("/vip", async (req, res) => {
 });
 
 
-// Cross-league "value bets" view: for every scheduled match today, compare the
-// model's probabilities against the best bookmaker price across all books and
-// surface the positive-edge selections (model thinks it's likelier than the
-// odds imply). One odds call per upcoming fixture, cached; finished matches are
-// skipped. Sorted best-edge first.
-router.get("/value", async (req, res) => {
-  const tz = req.query.tz;
-  const targetDate = req.query.date || formatDate(new Date(), tz);
-
-  const cacheKey = `value:${targetDate}:${tz || "server"}`;
-  const cached = cacheGet(cacheKey);
-  if (cached) return res.json({ ...cached, fromCache: true });
-
-  try {
-    // Reuses the per-league-day cache shared with /today, /accumulators, /vip.
-    const groups = await Promise.all(
-      LEAGUES.map((l) =>
-        buildLeagueDay(l.id, targetDate, tz).catch((e) => {
-          console.error(`[value] ${l.id}: ${e.message}`);
-          return null;
-        })
-      )
-    );
-
-    const leagues = groups
-      .filter((g) => g && g.fixtures && g.fixtures.length)
-      .map((g) => ({ league: g.league, fixtures: g.fixtures }));
-
-    const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
-
-    // Fetch odds only for upcoming, predictable fixtures (skip finished and any
-    // without a prediction). getFixtureOdds is cached per fixture; the upstream
-    // rate limiter serializes the calls so this stays within budget.
-    const oddsMap = {};
-    for (const g of leagues) {
-      for (const fx of g.fixtures) {
-        if (fx.status === "finished") continue;
-        if (!fx.prediction?.markets || fx.prediction.home == null) continue;
-        const odds = await getFixtureOdds(fx.id);
-        if (odds) oddsMap[fx.id] = odds;
-      }
-    }
-
-    const bets = buildValueBets(leagues, oddsMap);
-    const result = {
-      date: targetDate,
-      totalMatches,
-      pricedMatches: Object.keys(oddsMap).length,
-      bets,
-    };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
-    res.json({ ...result, fromCache: false });
-  } catch (err) {
-    console.error(`[value] ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 router.get("/fixtures/:leagueId/range", async (req, res) => {
   const { leagueId } = req.params;
   const { from, days = 7, tz } = req.query;
@@ -1342,8 +1318,15 @@ router.get("/match/:matchId/prediction", async (req, res) => {
 // when available, else a projected XI; the positional foul model runs across
 // both sides in three phases — gather stats, compute matchups, price props.
 // Shared by the /players route and the Props Finder.
-async function getFixturePlayerProps(fixtureId, season) {
-  const cacheKey = `player-props:${fixtureId}:${season}`;
+async function getFixturePlayerProps(fixtureId, season, context = null) {
+  // Opponent-aware context (Event Generator) shifts shot/saves volumes, so it must
+  // be part of the key — otherwise the Event Generator's adjusted props would leak
+  // into the (opponent-agnostic) Props Finder and vice-versa.
+  const ctxSig = context
+    ? `h${context.home?.attackMultiplier?.toFixed(2)}/${context.home?.savesMultiplier?.toFixed(2)}` +
+      `:a${context.away?.attackMultiplier?.toFixed(2)}/${context.away?.savesMultiplier?.toFixed(2)}`
+    : "base";
+  const cacheKey = `player-props:${fixtureId}:${season}:${ctxSig}`;
   const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached;
 
@@ -1352,6 +1335,10 @@ async function getFixturePlayerProps(fixtureId, season) {
 
   let meta = []; // [{ teamId, teamName, formation, starters }]
   let projected;
+  // How the XI was sourced, so the UI can label it and so we can auto-update:
+  // "official" (real lineup for this match), "last" (each side's most recent
+  // starting XI), or "projected" (current-season most-used pool).
+  let lineupSource = "official";
   if (hasLineups) {
     projected = false;
     for (const side of lineups) {
@@ -1370,23 +1357,37 @@ async function getFixturePlayerProps(fixtureId, season) {
       cacheSet(cacheKey, out, TTL.FIXTURES);
       return out;
     }
-    // Drop injured/suspended players from the projected XI so we never price a
-    // player who won't be on the pitch (the official-lineup path already omits
-    // them). Refilled to 11 from the next most-used players in the pool.
+    // Drop injured/suspended players so we never price someone who won't feature
+    // (the official-lineup path already omits them).
     const outIds = await getFixtureOutIds(fixtureId);
+    let usedLast = false;
     for (const t of [teams.home, teams.away]) {
       if (!t.id) { meta.push(null); continue; }
-      const pool = await getProjectedXI(t.id, season);
-      const xi = pool.filter((p) => !outIds.has(p.id)).slice(0, 11);
-      meta.push({ teamId: t.id, teamName: t.name, formation: null, starters: await gatherStarters(xi, season) });
+      // Prefer the team's last real starting XI (always available once a team has
+      // played); fall back to the most-used current-season pool only if we can't
+      // get a lineup. The last XI also carries the grid → positional foul model.
+      const last = await getTeamLastStartXI(t.id).catch(() => null);
+      const lastXi = last ? last.startXI.filter((p) => p.id && !outIds.has(p.id)) : [];
+      let xi, formation = null;
+      if (lastXi.length >= 8) {
+        xi = lastXi.slice(0, 11);
+        formation = last.formation;
+        usedLast = true;
+      } else {
+        const pool = await getProjectedXI(t.id, season);
+        xi = pool.filter((p) => !outIds.has(p.id)).slice(0, 11);
+      }
+      meta.push({ teamId: t.id, teamName: t.name, formation, starters: await gatherStarters(xi, season) });
     }
+    lineupSource = usedLast ? "last" : "projected";
   }
 
   // Positional foul model — only fires with official lineups (grid present); a
   // projected XI has no grid, so foulMatchups returns {} (no adjustment).
   const matchups = foulMatchups(meta[0]?.starters || [], meta[1]?.starters || []);
-  const sides = meta.map((s) =>
-    s ? { teamId: s.teamId, teamName: s.teamName, formation: s.formation, players: rowsFromStarters(s.starters, matchups) } : null
+  const sideOpts = [context?.home || null, context?.away || null];
+  const sides = meta.map((s, i) =>
+    s ? { teamId: s.teamId, teamName: s.teamName, formation: s.formation, players: rowsFromStarters(s.starters, matchups, sideOpts[i]) } : null
   );
 
   const hasAny = sides.some((s) => s && s.players.some((p) => p.props));
@@ -1396,8 +1397,11 @@ async function getFixturePlayerProps(fixtureId, season) {
     return out;
   }
 
-  const out = { available: true, projected, season, home: sides[0] || null, away: sides[1] || null };
-  cacheSet(cacheKey, out, TTL.FIXTURES);
+  const out = { available: true, projected, source: lineupSource, season, home: sides[0] || null, away: sides[1] || null };
+  // On a fallback XI, cache only briefly so the board flips to the OFFICIAL lineup
+  // within a few minutes of it being posted (~1h before kickoff); official lineups
+  // are stable so they cache for the full window.
+  cacheSet(cacheKey, out, lineupSource === "official" ? TTL.FIXTURES : 3 * 60);
   return out;
 }
 
@@ -1484,10 +1488,22 @@ router.get("/props-finder", async (req, res) => {
     }
     const leagueList = [...leagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
+    // Every league with a match on this date — FINISHED or upcoming. `leagues`
+    // above is upcoming-only (props load only for games still to come); this
+    // wider list backs an "all day" selector that a time window then narrows.
+    const allLeagueMap = new Map();
+    for (const fx of dayFixtures) {
+      const lg = LEAGUES_BY_ID[String(fx.leagueId)];
+      if (!lg || lg.noProps || !fx.startTimestamp) continue;
+      if (formatDate(new Date(fx.startTimestamp * 1000), tz) !== targetDate) continue;
+      if (!allLeagueMap.has(lg.id)) allLeagueMap.set(lg.id, { id: lg.id, name: lg.name, flag: lg.flag });
+    }
+    const allLeagues = [...allLeagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+
     // No league or match chosen yet → return only the selector lists. Players load
     // once the user narrows to a league or a single match.
     if (!leagueId && !matchId) {
-      const result = { date: targetDate, within: within || null, match: null, league: null, count: 0, matches, leagues: leagueList, players: [] };
+      const result = { date: targetDate, within: within || null, match: null, league: null, count: 0, matches, leagues: leagueList, allLeagues, players: [] };
       cacheSet(cacheKey, result, TTL.FIXTURES);
       return res.json({ ...result, fromCache: false });
     }
@@ -1579,6 +1595,212 @@ router.get("/match/:fixtureId/corners", async (req, res) => {
   } catch (err) {
     console.error(`[corners] ${err.message}`);
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Event Generator: one call that assembles the "what's likely to happen" board
+// for a single fixture — match outcome markets (+ value vs the book's de-vigged
+// price), per-team first-half corners, and every starter's player-event tiers,
+// made opponent-aware. Stitches the matchday prediction, corner model and
+// player-prop model together. LAZY + cached; built only on a "Generate" click.
+// Build the full event board for one fixture: outcome markets, first-half corner
+// projections, and per-player event props (opponent-aware). Used by the
+// Event Generator's match route below. Throws an Error with .status on failure.
+async function buildEventBoard(fixtureId, leagueId, targetDate, tz) {
+  const day = await buildLeagueDayAny(leagueId, targetDate, tz);
+  const fx = (day?.fixtures || []).find((f) => String(f.id) === String(fixtureId));
+  if (!fx) { const e = new Error("Match not found on this date."); e.status = 404; throw e; }
+
+  const p = fx.prediction;
+  const m = p?.markets || {};
+  const outcome = p
+    ? {
+        home: p.home, draw: p.draw, away: p.away,
+        winner: m.winner, win: m.win,
+        home1Plus: m.home1Plus, away1Plus: m.away1Plus,
+        home2Plus: m.home2Plus, away2Plus: m.away2Plus,
+        over25: m.over25, btts: m.btts, expectedGoals: m.expectedGoals,
+      }
+    : null;
+
+  const homeTeamId = fx.homeTeam?.id;
+  const awayTeamId = fx.awayTeam?.id;
+
+  // Opponent-aware context for the player volume markets: each side's expected
+  // goals (Poisson means) vs a neutral baseline. A side expected to dominate
+  // creates more shots; the opposing keeper faces more saves.
+  const REF_XG = 1.35;
+  const clampMult = (x) => Math.max(0.7, Math.min(1.6, x));
+  const homeAtt = m.xgHome != null ? clampMult(m.xgHome / REF_XG) : 1;
+  const awayAtt = m.xgAway != null ? clampMult(m.xgAway / REF_XG) : 1;
+  const context = {
+    home: { attackMultiplier: homeAtt, savesMultiplier: awayAtt },
+    away: { attackMultiplier: awayAtt, savesMultiplier: homeAtt },
+  };
+
+  const season = await getCurrentSeason(leagueId).catch(() => null);
+  const year = season ? Number(season.id) : null;
+  const propsSeason = leagueId === "1" ? year - 1 : year;
+
+  const [corners, props, odds] = await Promise.all([
+    homeTeamId && awayTeamId
+      ? Promise.all([
+          getTeamCornerRates(homeTeamId).catch(() => ({ for: null, against: null, games: 0 })),
+          getTeamCornerRates(awayTeamId).catch(() => ({ for: null, against: null, games: 0 })),
+        ]).then(([h, a]) => ({ available: h.games + a.games > 0, prediction: computeCornerPrediction(h, a) }))
+      : Promise.resolve({ available: false, prediction: null }),
+    Number.isFinite(propsSeason)
+      ? getFixturePlayerProps(fixtureId, propsSeason, context).catch(() => ({ available: false }))
+      : Promise.resolve({ available: false, reason: "Season data unavailable for this league." }),
+    fx.status !== "finished" ? getFixtureOdds(fixtureId).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  const oddOf = (x) => (x && typeof x.odd === "number" ? x.odd : null);
+  const devigTwo = (yes, no) => {
+    const yo = oddOf(yes), no_ = oddOf(no);
+    if (!(yo > 1) || !(no_ > 1)) return null;
+    return Math.round((1 / yo) / (1 / yo + 1 / no_) * 100);
+  };
+  if (outcome && odds?.best) {
+    const b = odds.best;
+    const hw = oddOf(b.homeWin), dr = oddOf(b.draw), aw = oddOf(b.awayWin);
+    let bookHome = null, bookDraw = null, bookAway = null;
+    if (hw > 1 && dr > 1 && aw > 1) {
+      const sm = 1 / hw + 1 / dr + 1 / aw;
+      bookHome = Math.round((1 / hw) / sm * 100);
+      bookDraw = Math.round((1 / dr) / sm * 100);
+      bookAway = Math.round((1 / aw) / sm * 100);
+    }
+    const book = {
+      home: bookHome, draw: bookDraw, away: bookAway,
+      over25: devigTwo(b.over25, b.under25),
+      btts: devigTwo(b.bttsYes, b.bttsNo),
+      home1Plus: devigTwo(b.homeToScore, b.homeNoScore),
+      away1Plus: devigTwo(b.awayToScore, b.awayNoScore),
+      home2Plus: devigTwo(b.home2Plus, b.homeUnder2),
+      away2Plus: devigTwo(b.away2Plus, b.awayUnder2),
+    };
+    if (Object.values(book).some((v) => v != null)) outcome.book = book;
+  }
+
+  const sideRows = (side) =>
+    side && side.players
+      ? side.players
+          .filter((pl) => pl.props?.tiers)
+          .map((pl) => ({
+            id: pl.id, name: pl.name, pos: pl.pos, photo: pl.photo,
+            tiers: pl.props.tiers, foulMatchup: pl.foulMatchup || null,
+          }))
+      : [];
+
+  return {
+    match: {
+      id: fx.id, home: fx.homeTeam?.name, away: fx.awayTeam?.name,
+      homeLogo: fx.homeTeam?.logo, awayLogo: fx.awayTeam?.logo,
+      homeTeamId, awayTeamId, kickoff: fx.startTimestamp, status: fx.status,
+      league: day?.league?.name || LEAGUES_BY_ID[leagueId]?.name,
+    },
+    outcome,
+    corners,
+    players: props.available
+      ? {
+          available: true, projected: props.projected, source: props.source,
+          home: props.home ? { teamName: props.home.teamName, rows: sideRows(props.home) } : null,
+          away: props.away ? { teamName: props.away.teamName, rows: sideRows(props.away) } : null,
+        }
+      : { available: false, reason: props.reason || "Player data isn't available for this match yet." },
+  };
+}
+
+// TTL for a built board: official/started lineups are stable; a fallback XI near
+// kickoff caches briefly so it flips when the confirmed lineup drops.
+function eventBoardTTL(out) {
+  const kickoff = out.match?.kickoff;
+  const minsToKO = kickoff ? (kickoff * 1000 - Date.now()) / 60000 : null;
+  const official = out.players?.available && out.players.source === "official";
+  if (official || minsToKO == null || minsToKO <= 0) return TTL.FIXTURES;
+  if (minsToKO <= 150) return 3 * 60;
+  return 10 * 60;
+}
+
+router.get("/match/:fixtureId/event-board", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const { fixtureId } = req.params;
+  const leagueId = req.query.league ? String(req.query.league) : null;
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  if (!leagueId || !LEAGUES_BY_ID[leagueId]) {
+    return res.status(400).json({ error: "league (query) required" });
+  }
+
+  const cacheKey = `event-board:${fixtureId}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    const out = await buildEventBoard(fixtureId, leagueId, targetDate, tz);
+    cacheSet(cacheKey, out, eventBoardTTL(out));
+    res.json({ ...out, fromCache: false });
+  } catch (err) {
+    console.error(`[event-board] ${err.message}`);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Corner Generator: for the selected league(s) on a day, each match with per-team
+// FIRST-HALF corner projections (2+/3+/4+) from the corner model's recent-rate
+// estimates. LAZY + cached; requires a league selection to bound the fan-out.
+router.get("/corner-board", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  const leagueIds = String(req.query.leagues || "")
+    .split(",").map((s) => s.trim()).filter((id) => LEAGUES_BY_ID[id]);
+  if (!leagueIds.length) return res.json({ date: targetDate, count: 0, matches: [] });
+
+  const cacheKey = `corner-board:${leagueIds.slice().sort().join("_")}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    const matches = [];
+    for (const lid of leagueIds) {
+      const day = await buildLeagueDay(lid, targetDate, tz).catch((e) => {
+        console.error(`[corner-board] ${lid}: ${e.message}`);
+        return null;
+      });
+      if (!day) continue;
+      for (const fx of day.fixtures) {
+        if (!fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+        const [hRates, aRates] = await Promise.all([
+          getTeamCornerRates(fx.homeTeam.id).catch(() => ({ for: null, against: null, games: 0 })),
+          getTeamCornerRates(fx.awayTeam.id).catch(() => ({ for: null, against: null, games: 0 })),
+        ]);
+        const pred = computeCornerPrediction(hRates, aRates);
+        matches.push({
+          id: fx.id,
+          league: day.league.name,
+          leagueFlag: day.league.flag,
+          kickoff: fx.startTimestamp,
+          status: fx.status,
+          firstHalfTotal: pred.firstHalfTotal,
+          available: hRates.games + aRates.games > 0,
+          home: { name: fx.homeTeam.name, logo: fx.homeTeam.logo, corners: pred.home },
+          away: { name: fx.awayTeam.name, logo: fx.awayTeam.logo, corners: pred.away },
+        });
+      }
+    }
+    matches.sort((a, b) => (b.firstHalfTotal || 0) - (a.firstHalfTotal || 0));
+    const result = { date: targetDate, count: matches.length, matches };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[corner-board] ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1686,5 +1908,59 @@ router.get("/odds-generator", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+router.get("/value", async (req, res) => {
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+
+  const cacheKey = `value:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Reuses the per-league-day cache shared with /today, /accumulators, /vip.
+    const groups = await Promise.all(
+      LEAGUES.map((l) =>
+        buildLeagueDay(l.id, targetDate, tz).catch((e) => {
+          console.error(`[value] ${l.id}: ${e.message}`);
+          return null;
+        })
+      )
+    );
+
+    const leagues = groups
+      .filter((g) => g && g.fixtures && g.fixtures.length)
+      .map((g) => ({ league: g.league, fixtures: g.fixtures }));
+
+    const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
+
+    // Fetch odds only for upcoming, predictable fixtures (skip finished and any
+    // without a prediction). getFixtureOdds is cached per fixture; the upstream
+    // rate limiter serializes the calls so this stays within budget.
+    const oddsMap = {};
+    for (const g of leagues) {
+      for (const fx of g.fixtures) {
+        if (fx.status === "finished") continue;
+        if (!fx.prediction?.markets || fx.prediction.home == null) continue;
+        const odds = await getFixtureOdds(fx.id);
+        if (odds) oddsMap[fx.id] = odds;
+      }
+    }
+
+    const bets = buildValueBets(leagues, oddsMap);
+    const result = {
+      date: targetDate,
+      totalMatches,
+      pricedMatches: Object.keys(oddsMap).length,
+      bets,
+    };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[value] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 export default router;

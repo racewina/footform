@@ -189,6 +189,11 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
       over35: pct(over35),
       btts: pct(btts),
       expectedGoals: +(lambdaHome + lambdaAway).toFixed(2),
+      // Per-side expected goals (the Poisson means). Used by the Event Generator
+      // to make player shot volumes and GK saves opponent-aware: a side expected
+      // to dominate creates more shots; the opposing keeper faces more.
+      xgHome: +lambdaHome.toFixed(2),
+      xgAway: +lambdaAway.toFixed(2),
     },
   };
 }

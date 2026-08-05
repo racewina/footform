@@ -51,11 +51,13 @@ function teamCornerMarkets(lambdaFull) {
   const p0 = poissonP(0, l1);
   const p1 = poissonP(1, l1);
   const p2 = poissonP(2, l1);
+  const p3 = poissonP(3, l1);
   return {
     full: +lambdaFull.toFixed(1),
     firstHalf: +l1.toFixed(1),
     fh2Plus: Math.round(clamp(1 - p0 - p1, 0, 1) * 100),
     fh3Plus: Math.round(clamp(1 - p0 - p1 - p2, 0, 1) * 100),
+    fh4Plus: Math.round(clamp(1 - p0 - p1 - p2 - p3, 0, 1) * 100),
   };
 }
 

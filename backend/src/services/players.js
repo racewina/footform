@@ -57,11 +57,23 @@ const pct = (x) => Math.round(clamp(x, 0, 1) * 100);
 // the 1+ value the existing card table reads. `opts.foulMultiplier` lets the
 // positional foul model (wide defender vs a dribbling winger) shade the foul
 // rate up — default 1 (no adjustment).
+//
+// Match-context multipliers make the volume markets opponent-aware (used by the
+// Event Generator, which knows the fixture; cross-match callers like the Props
+// Finder omit them so the numbers stay pure club form):
+//   • opts.attackMultiplier — the player's SIDE attack level this match (from the
+//     model's expected goals). Scales shots/shots-on-target: a side expected to
+//     dominate takes more shots.
+//   • opts.savesMultiplier — the OPPONENT's attack level. Scales GK saves: a
+//     keeper facing a shot-heavy side makes more saves, one on a dominant team
+//     fewer. This corrects saves' biggest blind spot (it's opponent-driven).
 export function playerProps(stat, opts = {}) {
   if (!stat || !stat.minutes) return null;
   const per90 = (n) => n / (stat.minutes / 90);
   const expMin = expectedMinutes(stat);
   const foulMult = opts.foulMultiplier > 0 ? opts.foulMultiplier : 1;
+  const attackMult = opts.attackMultiplier > 0 ? opts.attackMultiplier : 1;
+  const savesMult = opts.savesMultiplier > 0 ? opts.savesMultiplier : 1;
 
   const mk = (rate90) => {
     const t = tierProbs(rate90, expMin);
@@ -69,22 +81,30 @@ export function playerProps(stat, opts = {}) {
   };
   const tiers = {
     score: mk(per90(stat.goals)),
-    shots: mk(per90(stat.shots)),
-    shotOnTarget: mk(per90(stat.shotsOnTarget)),
+    // Goal involvement — a goal OR an assist. Rates add under the Poisson sum, so
+    // one combined rate prices the "to score or assist" market directly.
+    scoreOrAssist: mk(per90((stat.goals || 0) + (stat.assists || 0))),
+    shots: mk(per90(stat.shots) * attackMult),
+    shotOnTarget: mk(per90(stat.shotsOnTarget) * attackMult),
     foul: mk(per90(stat.foulsCommitted) * foulMult),
     fouled: mk(per90(stat.foulsDrawn)),
     tackle: mk(per90(stat.tackles)),
     yellow: mk(per90(stat.yellow)),
+    // Goalkeeper saves — non-zero only for keepers, so this market self-filters to
+    // the GK when the UI ranks by it. Scaled by the opponent's attack volume.
+    saves: mk(per90(stat.saves || 0) * savesMult),
   };
 
   return {
     minutes: stat.minutes,
     expMin: Math.round(expMin),
     score: tiers.score[1],
+    scoreOrAssist: tiers.scoreOrAssist[1],
     foul: tiers.foul[1],
     fouled: tiers.fouled[1],
     tackle: tiers.tackle[1],
     shotOnTarget: tiers.shotOnTarget[1],
+    saves: tiers.saves[1],
     tiers,
   };
 }

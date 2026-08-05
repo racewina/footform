@@ -251,6 +251,34 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           <button
             style={{
               ...styles.todayItem,
+              ...(String(selectedId) === "corner-gen" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("corner-gen");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>⛳</span>
+            <span style={styles.itemName}>Corner Generator</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "event-gen" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("event-gen");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>⚡</span>
+            <span style={styles.itemName}>Event Generator</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
               ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {

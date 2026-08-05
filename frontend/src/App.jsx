@@ -10,6 +10,9 @@ import VipBetPage from "./pages/VipBetPage";
 import ValueBetsPage from "./pages/ValueBetsPage";
 import PropsFinderPage from "./pages/PropsFinderPage";
 import OddsGeneratorPage from "./pages/OddsGeneratorPage";
+import CornerGeneratorPage from "./pages/CornerGeneratorPage";
+import EventGeneratorPage from "./pages/EventGeneratorPage";
+import ToolGate from "./components/ToolGate";
 import RoiPage from "./pages/RoiPage";
 import PullToRefresh from "./components/PullToRefresh";
 import "./index.css";
@@ -102,6 +105,10 @@ export default function App() {
               ? <PropsFinderPage />
             : selectedLeague === "odds-gen"
               ? <OddsGeneratorPage date={viewDate} onDateChange={setViewDate} onOpenLeague={navigate} />
+            : selectedLeague === "corner-gen"
+              ? <ToolGate title="Corner Generator"><CornerGeneratorPage date={viewDate} onDateChange={setViewDate} onOpenLeague={navigate} /></ToolGate>
+            : selectedLeague === "event-gen"
+              ? <ToolGate title="Event Generator"><EventGeneratorPage date={viewDate} /></ToolGate>
             : selectedLeague === "roi"
               ? <RoiPage />
             : selectedLeague === "value"
@@ -132,6 +139,8 @@ const LEAGUE_NAMES = {
   "vip": { name: "VIP Bet", flag: "💎" },
   "props-finder": { name: "Props Finder", flag: "🔎" },
   "odds-gen": { name: "Odds Generator", flag: "🎰" },
+  "corner-gen": { name: "Corner Generator", flag: "⛳" },
+  "event-gen": { name: "Event Generator", flag: "⚡" },
   "value": { name: "Value Bets", flag: "📈" },
   "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

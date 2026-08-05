@@ -230,6 +230,25 @@ export async function fetchTeamLeagues(teamId) {
   }));
 }
 
+// The next scheduled meeting between two teams (event generator needs a REAL
+// fixture — squads/lineups — not a hypothetical). Returns the fixture's id,
+// kickoff, league and the actual home/away (venue is set by the fixture, which
+// may differ from the order the caller asked). null when none is scheduled.
+export async function fetchHeadToHead(homeId, awayId) {
+  const json = await request(`/fixtures/headtohead?h2h=${homeId}-${awayId}&next=1`);
+  const rows = Array.isArray(json?.response) ? json.response : [];
+  if (!rows.length) return null;
+  const fx = rows[0];
+  return {
+    fixtureId: fx.fixture?.id,
+    startTimestamp: fx.fixture?.timestamp ?? null,
+    leagueId: fx.league?.id != null ? String(fx.league.id) : null,
+    leagueName: fx.league?.name || null,
+    home: fx.teams?.home?.name || null,
+    away: fx.teams?.away?.name || null,
+  };
+}
+
 // --- Player props (lineups + per-player season stats) ----------------------
 // These power the World Cup player-prop markets (anytime scorer / to commit a
 // foul / to be fouled / player tackle). They are NOT used by the matchday or
@@ -334,7 +353,7 @@ export async function fetchPlayerSeasonStats(playerId, season) {
   if (!row) return null;
 
   const blocks = Array.isArray(row.statistics) ? row.statistics : [];
-  let minutes = 0, apps = 0, goals = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0;
+  let minutes = 0, apps = 0, goals = 0, assists = 0, saves = 0, foulsCommitted = 0, foulsDrawn = 0, tackles = 0;
   let shots = 0, shotsOnTarget = 0, yellow = 0, dribbles = 0;
   let pos = null, posMinutes = -1;
   for (const b of blocks) {
@@ -342,6 +361,10 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     minutes += m;
     apps += b.games?.appearences || 0;
     goals += b.goals?.total || 0;
+    // Assists (feeds the score-or-assist market) and goalkeeper saves (feeds the
+    // GK saves market) both live under `goals` in the API-Football stat block.
+    assists += b.goals?.assists || 0;
+    saves += b.goals?.saves || 0;
     foulsCommitted += b.fouls?.committed || 0;
     foulsDrawn += b.fouls?.drawn || 0;
     tackles += b.tackles?.total || 0;
@@ -363,6 +386,8 @@ export async function fetchPlayerSeasonStats(playerId, season) {
     minutes,
     apps,
     goals,
+    assists,
+    saves,
     foulsCommitted,
     foulsDrawn,
     tackles,
