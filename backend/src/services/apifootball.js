@@ -395,10 +395,39 @@ export async function fetchFixtureOdds(fixtureId) {
     if (!best[key] || odd > best[key].odd) best[key] = { odd, book: bookName };
   };
 
+  // Corner Over/Under lines keyed by market bucket → line → { over, under }. Books
+  // publish many lines per fixture (Over 4.5, Over 5.5, …); the Odds Generator
+  // prices whichever land in the user's odds range, so keep them all, best odd per
+  // side per line. CORNER_BUCKETS maps the feed's market names to our buckets.
+  const CORNER_BUCKETS = {
+    "Corners Over Under": "totalFull",
+    "Total Corners (1st Half)": "total1H",
+    "Home Corners Over/Under": "homeFull",
+    "Away Corners Over/Under": "awayFull",
+    "Home Total Corners (1st Half)": "home1H",
+    "Away Total Corners (1st Half)": "away1H",
+  };
+  const corners = {};
+  const considerCorner = (bucket, side, line, oddStr, bookName) => {
+    const odd = parseFloat(oddStr);
+    if (!(odd > 1)) return;
+    const b = (corners[bucket] ||= {});
+    const row = (b[line] ||= {});
+    if (!row[side] || odd > row[side].odd) row[side] = { odd, book: bookName };
+  };
+
   for (const bk of books) {
     const name = bk.name || "—";
     for (const bet of bk.bets || []) {
       const market = bet.name;
+      const cornerBucket = CORNER_BUCKETS[market];
+      if (cornerBucket) {
+        for (const v of bet.values || []) {
+          const mo = /^(Over|Under)\s+([\d.]+)$/.exec(String(v.value));
+          if (mo) considerCorner(cornerBucket, mo[1].toLowerCase(), mo[2], v.odd, name);
+        }
+        continue;
+      }
       for (const v of bet.values || []) {
         const val = String(v.value);
         if (market === "Match Winner") {
@@ -406,8 +435,16 @@ export async function fetchFixtureOdds(fixtureId) {
           else if (val === "Draw") consider("draw", v.odd, name);
           else if (val === "Away") consider("awayWin", v.odd, name);
         } else if (market === "Goals Over/Under") {
-          if (val === "Over 2.5") consider("over25", v.odd, name);
+          if (val === "Over 1.5") consider("over15", v.odd, name);
+          else if (val === "Under 1.5") consider("under15", v.odd, name);
+          else if (val === "Over 2.5") consider("over25", v.odd, name);
           else if (val === "Under 2.5") consider("under25", v.odd, name);
+          else if (val === "Over 3.5") consider("over35", v.odd, name);
+          else if (val === "Under 3.5") consider("under35", v.odd, name);
+        } else if (market === "Double Chance") {
+          if (val === "Home/Draw") consider("dc1x", v.odd, name);
+          else if (val === "Home/Away") consider("dc12", v.odd, name);
+          else if (val === "Draw/Away") consider("dcx2", v.odd, name);
         } else if (market === "Both Teams Score") {
           if (val === "Yes") consider("bttsYes", v.odd, name);
           else if (val === "No") consider("bttsNo", v.odd, name);
@@ -431,8 +468,8 @@ export async function fetchFixtureOdds(fixtureId) {
     }
   }
 
-  if (!Object.keys(best).length) return null;
-  return { bookmakers: books.length, best };
+  if (!Object.keys(best).length && !Object.keys(corners).length) return null;
+  return { bookmakers: books.length, best, corners };
 }
 
 // Players unavailable for a fixture (injured / suspended). API-Football populates

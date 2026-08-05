@@ -33,6 +33,7 @@ import { buildAccumulators, buildLegPool } from "../services/accumulator.js";
 import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB, MARQUEE_LEAGUES, SOUTH_AMERICAN_LEAGUES, SA_FLOOR } from "../services/vipbet.js";
 import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
+import { oddsCandidates, bestInRange, oddsRangeLadder } from "../services/oddsGenerator.js";
 import { buildEloModel } from "../services/elo.js";
 import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
 
@@ -1578,6 +1579,111 @@ router.get("/match/:fixtureId/corners", async (req, res) => {
   } catch (err) {
     console.error(`[corners] ${err.message}`);
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Odds Generator: scans the selected leagues' UPCOMING fixtures within a time
+// window and, for each, returns the SINGLE highest-confidence market whose REAL
+// bookmaker odds fall in the chosen range. Markets span goal/result and corner
+// lines (see oddsGenerator.js); every price is a real book price, never fair odds.
+// `within` = all|1|3|6 (hours from now, today only); `oddsMin`/`oddsMax` bound the
+// range; `leagues` is a csv of league ids. Returns the odds ladder for the UI too.
+const ODDS_GEN_MAX_FIXTURES = 80; // upper bound on per-request odds/corner fan-out
+// This tool is private (not for the public site). The gate code lives ONLY on the
+// server — the client never ships it; a user types it and it rides along as the
+// `x-odds-pass` header. Override in the environment; falls back to the set code.
+const ODDS_GEN_PASS = process.env.ODDS_GEN_PASS || "1211";
+router.get("/odds-generator", async (req, res) => {
+  const pass = req.get("x-odds-pass") || req.query.pass || "";
+  if (String(pass) !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  const within = ["1", "3", "6"].includes(String(req.query.within)) ? String(req.query.within) : "all";
+  const oddsMin = Number(req.query.oddsMin) > 1 ? Number(req.query.oddsMin) : 1.01;
+  const oddsMax = Number(req.query.oddsMax) >= oddsMin ? Number(req.query.oddsMax) : 1000;
+  const leagueIds = String(req.query.leagues || "")
+    .split(",").map((s) => s.trim()).filter((id) => LEAGUES_BY_ID[id]);
+
+  const ladder = oddsRangeLadder();
+  if (!leagueIds.length) {
+    return res.json({ date: targetDate, within, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder, count: 0, matches: [] });
+  }
+
+  const key = `${leagueIds.slice().sort().join("_")}:${within}:${oddsMin}-${oddsMax}`;
+  const cacheKey = `odds-gen:${key}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Time window: only UPCOMING fixtures, optionally within N hours of now.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const isToday = targetDate === formatDate(new Date(), tz);
+    const cutoff = within !== "all" && isToday ? nowSec + Number(within) * 3600 : Infinity;
+    const inWindow = (fx) =>
+      fx.status === "notstarted" &&
+      (!isToday || !fx.startTimestamp || fx.startTimestamp >= nowSec - 600) && // drop already-started today
+      (cutoff === Infinity || (fx.startTimestamp && fx.startTimestamp <= cutoff));
+
+    // Gather qualifying fixtures across the selected leagues first, so the pricey
+    // odds/corner fetches only run on the fixtures that pass the time filter.
+    const targets = [];
+    for (const lid of leagueIds) {
+      const day = await buildLeagueDay(lid, targetDate, tz).catch((e) => {
+        console.error(`[odds-gen] ${lid}: ${e.message}`);
+        return null;
+      });
+      if (!day) continue;
+      for (const fx of day.fixtures) {
+        if (!fx.homeTeam?.id || !fx.awayTeam?.id || !fx.prediction?.markets) continue;
+        if (!inWindow(fx)) continue;
+        targets.push({ fx, league: day.league });
+      }
+    }
+    targets.sort((a, b) => (a.fx.startTimestamp || 0) - (b.fx.startTimestamp || 0));
+    const capped = targets.slice(0, ODDS_GEN_MAX_FIXTURES);
+
+    const matches = [];
+    for (const { fx, league } of capped) {
+      const [odds, hRates, aRates] = await Promise.all([
+        getFixtureOdds(fx.id).catch(() => null),
+        getTeamCornerRates(fx.homeTeam.id).catch(() => ({ for: null, against: null, games: 0 })),
+        getTeamCornerRates(fx.awayTeam.id).catch(() => ({ for: null, against: null, games: 0 })),
+      ]);
+      if (!odds) continue; // no real prices → can't qualify a market on book odds
+      const cornerPred = computeCornerPrediction(hRates, aRates);
+      const cornersAvailable = hRates.games + aRates.games > 0;
+      let cands = oddsCandidates(fx, cornerPred, odds);
+      // Corner projections built purely off baselines (no real history) aren't
+      // trustworthy — drop them so the pick falls back to the best goal market.
+      if (!cornersAvailable) cands = cands.filter((c) => c.group !== "Corners");
+      const pick = bestInRange(cands, oddsMin, oddsMax);
+      if (!pick) continue;
+      matches.push({
+        id: fx.id,
+        leagueId: league.id,
+        league: league.name,
+        leagueFlag: league.flag,
+        kickoff: fx.startTimestamp,
+        home: { name: fx.homeTeam.name, logo: fx.homeTeam.logo },
+        away: { name: fx.awayTeam.name, logo: fx.awayTeam.logo },
+        pick,
+        qualifyingMarkets: cands.filter((c) => c.bookOdds >= oddsMin && c.bookOdds <= oddsMax).length,
+      });
+    }
+    // Best confidence first — the strongest opportunities on top.
+    matches.sort((a, b) => b.pick.probability - a.pick.probability);
+
+    const result = {
+      date: targetDate, within, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder,
+      scanned: capped.length, count: matches.length, matches,
+    };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[odds-gen] ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 

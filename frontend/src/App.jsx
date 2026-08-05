@@ -9,6 +9,7 @@ import SafeBetsResultsPage from "./pages/SafeBetsResultsPage";
 import VipBetPage from "./pages/VipBetPage";
 import ValueBetsPage from "./pages/ValueBetsPage";
 import PropsFinderPage from "./pages/PropsFinderPage";
+import OddsGeneratorPage from "./pages/OddsGeneratorPage";
 import RoiPage from "./pages/RoiPage";
 import PullToRefresh from "./components/PullToRefresh";
 import "./index.css";
@@ -99,6 +100,8 @@ export default function App() {
             ? <ResultsPage />
             : selectedLeague === "props-finder"
               ? <PropsFinderPage />
+            : selectedLeague === "odds-gen"
+              ? <OddsGeneratorPage date={viewDate} onDateChange={setViewDate} onOpenLeague={navigate} />
             : selectedLeague === "roi"
               ? <RoiPage />
             : selectedLeague === "value"
@@ -128,6 +131,7 @@ const LEAGUE_NAMES = {
   "safe-results": { name: "Safe Bets Record", flag: "🧾" },
   "vip": { name: "VIP Bet", flag: "💎" },
   "props-finder": { name: "Props Finder", flag: "🔎" },
+  "odds-gen": { name: "Odds Generator", flag: "🎰" },
   "value": { name: "Value Bets", flag: "📈" },
   "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

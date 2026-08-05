@@ -146,7 +146,7 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
     pa[k] = poissonP(k, lambdaAway);
   }
 
-  let sum = 0, homeWin = 0, draw = 0, awayWin = 0, over15 = 0, over25 = 0, btts = 0;
+  let sum = 0, homeWin = 0, draw = 0, awayWin = 0, over15 = 0, over25 = 0, over35 = 0, btts = 0;
   let home1 = 0, home2 = 0, away1 = 0, away2 = 0;
   for (let i = 0; i <= MAX_GOALS; i++) {
     for (let j = 0; j <= MAX_GOALS; j++) {
@@ -157,6 +157,7 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
       else awayWin += p;
       if (i + j >= 2) over15 += p;
       if (i + j >= 3) over25 += p;
+      if (i + j >= 4) over35 += p;
       if (i >= 1 && j >= 1) btts += p;
       if (i >= 1) home1 += p;
       if (i >= 2) home2 += p;
@@ -185,6 +186,7 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
       away2Plus: pct(away2),
       over15: pct(over15),
       over25: pct(over25),
+      over35: pct(over35),
       btts: pct(btts),
       expectedGoals: +(lambdaHome + lambdaAway).toFixed(2),
     },
