@@ -122,83 +122,88 @@ async function leagueContext(homeId, awayId) {
   };
 }
 
+// Resolve two team names to the model's matchup prediction — the window-independent
+// pipeline (recent form + shared-league Elo + goal baselines → computePrediction),
+// so it works for ANY matchup regardless of when they next play. Cached. Throws an
+// Error with `.status` (404/422) + `.resolved` on the expected failures. Shared by
+// the /analyze route AND the VIP /predict engine (predict.js) so there's one model.
+export async function analyzeMatchup(home, away) {
+  const cacheKey = `analyze:${String(home).toLowerCase()}::${String(away).toLowerCase()}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const [homeTeam, awayTeam] = await Promise.all([resolveTeam(home), resolveTeam(away)]);
+  if (!homeTeam || !awayTeam) {
+    const e = new Error("Could not resolve one or both teams.");
+    e.status = 404; e.resolved = { home: homeTeam?.name || null, away: awayTeam?.name || null };
+    throw e;
+  }
+
+  const [homeData, awayData] = await Promise.all([
+    fetchTeamLastMatches(homeTeam.id).catch(() => ({ events: [] })),
+    fetchTeamLastMatches(awayTeam.id).catch(() => ({ events: [] })),
+  ]);
+  const homeForm = parseFormFromEvents(homeData.events || [], homeTeam.id);
+  const awayForm = parseFormFromEvents(awayData.events || [], awayTeam.id);
+  if (!homeForm.length || !awayForm.length) {
+    const e = new Error("Not enough recent match data to analyze one or both teams.");
+    e.status = 422; e.resolved = { home: homeTeam.name, away: awayTeam.name };
+    throw e;
+  }
+
+  // Full model when both teams share a domestic league (Elo + goal baselines,
+  // same as the app's fixture predictions); form-only fallback otherwise.
+  const ctx = await leagueContext(homeTeam.id, awayTeam.id).catch(() => null);
+  const p = computePrediction(
+    homeForm, awayForm,
+    ctx?.eloRatings || null,
+    ctx?.baselines || null,
+    decayFor(Math.floor(Date.now() / 1000)),
+  );
+  const m = p.markets || {};
+
+  const { lambdaHome, lambdaAway } = reconstructLambdas(m);
+  const scorelines = topScorelines(lambdaHome, lambdaAway, 5).map((s) => ({
+    score: `${s.home}-${s.away}`, home: s.home, away: s.away, prob: Math.round(s.prob * 100),
+  }));
+
+  const result = {
+    home: { id: homeTeam.id, name: homeTeam.name, logo: homeTeam.logo },
+    away: { id: awayTeam.id, name: awayTeam.name, logo: awayTeam.logo },
+    probabilities: { home: p.home, draw: p.draw, away: p.away },
+    expectedGoals: m.expectedGoals ?? null,
+    scorelines,
+    markets: {
+      over15: m.over15, over25: m.over25, btts: m.btts,
+      home1Plus: m.home1Plus, home2Plus: m.home2Plus,
+      away1Plus: m.away1Plus, away2Plus: m.away2Plus,
+    },
+    confidence: p.confidence,
+    form: { home: p.homeForm, away: p.awayForm },
+    context: {
+      league: ctx?.league || null,
+      model: ctx ? "form + season strength + league baselines" : "recent form only",
+    },
+    note: "Model-based estimates. Football analysis only — not betting advice.",
+  };
+
+  cacheSet(cacheKey, result, TTL.TEAM_FORM);
+  return result;
+}
+
 router.get("/analyze", requireKey, analyzeLimiter, async (req, res) => {
   const home = String(req.query.home || "").trim();
   const away = String(req.query.away || "").trim();
   if (!home || !away) {
     return res.status(400).json({ error: "home and away query params are required (team names)." });
   }
-
-  const cacheKey = `analyze:${home.toLowerCase()}::${away.toLowerCase()}`;
-  const cached = cacheGet(cacheKey);
-  if (cached) return res.json({ ...cached, fromCache: true });
-
   try {
-    const [homeTeam, awayTeam] = await Promise.all([resolveTeam(home), resolveTeam(away)]);
-    if (!homeTeam || !awayTeam) {
-      return res.status(404).json({
-        error: "Could not resolve one or both teams.",
-        resolved: { home: homeTeam?.name || null, away: awayTeam?.name || null },
-      });
-    }
-
-    const [homeData, awayData] = await Promise.all([
-      fetchTeamLastMatches(homeTeam.id).catch(() => ({ events: [] })),
-      fetchTeamLastMatches(awayTeam.id).catch(() => ({ events: [] })),
-    ]);
-
-    const homeForm = parseFormFromEvents(homeData.events || [], homeTeam.id);
-    const awayForm = parseFormFromEvents(awayData.events || [], awayTeam.id);
-    if (!homeForm.length || !awayForm.length) {
-      return res.status(422).json({
-        error: "Not enough recent match data to analyze one or both teams.",
-        resolved: { home: homeTeam.name, away: awayTeam.name },
-      });
-    }
-
-    // Full model when both teams share a domestic league (Elo + goal baselines,
-    // same as the app's fixture predictions); form-only fallback otherwise.
-    const ctx = await leagueContext(homeTeam.id, awayTeam.id).catch(() => null);
-    const p = computePrediction(
-      homeForm, awayForm,
-      ctx?.eloRatings || null,
-      ctx?.baselines || null,
-      decayFor(Math.floor(Date.now() / 1000)),
-    );
-    const m = p.markets || {};
-
-    // Model's headline scoreline scenarios (top 5), labelled with the team names.
-    const { lambdaHome, lambdaAway } = reconstructLambdas(m);
-    const scorelines = topScorelines(lambdaHome, lambdaAway, 5).map((s) => ({
-      score: `${s.home}-${s.away}`,
-      home: s.home,
-      away: s.away,
-      prob: Math.round(s.prob * 100),
-    }));
-
-    const result = {
-      home: { id: homeTeam.id, name: homeTeam.name, logo: homeTeam.logo },
-      away: { id: awayTeam.id, name: awayTeam.name, logo: awayTeam.logo },
-      probabilities: { home: p.home, draw: p.draw, away: p.away },
-      expectedGoals: m.expectedGoals ?? null,
-      scorelines,
-      markets: {
-        over15: m.over15, over25: m.over25, btts: m.btts,
-        home1Plus: m.home1Plus, home2Plus: m.home2Plus,
-        away1Plus: m.away1Plus, away2Plus: m.away2Plus,
-      },
-      confidence: p.confidence,
-      form: { home: p.homeForm, away: p.awayForm },
-      context: {
-        league: ctx?.league || null,
-        model: ctx ? "form + season strength + league baselines" : "recent form only",
-      },
-      note: "Model-based estimates. Football analysis only — not betting advice.",
-    };
-
-    cacheSet(cacheKey, result, TTL.TEAM_FORM);
+    const result = await analyzeMatchup(home, away);
     res.json({ ...result, fromCache: false });
   } catch (err) {
+    if (err.status === 404 || err.status === 422) {
+      return res.status(err.status).json({ error: err.message, resolved: err.resolved });
+    }
     console.error(`[analyze] ${err.message}`);
     res.status(err.status || 500).json({ error: err.message });
   }

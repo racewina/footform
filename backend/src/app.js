@@ -3,6 +3,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import fixturesRouter from "./routes/fixtures.js";
 import analyzeRouter from "./routes/analyze.js";
+import predictRouter from "./routes/predict.js";
 import seoRouter from "./routes/seo.js";
 import { cacheStats } from "./services/cache.js";
 import { snapshotEnabled, loadSnapshot, saveSnapshot } from "./services/snapshot.js";
@@ -23,6 +24,7 @@ app.use(
 );
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // the /predict unlock form posts urlencoded
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
@@ -96,6 +98,7 @@ app.use("/api", async (req, res, next) => {
 });
 
 app.use("/api", analyzeRouter);
+app.use("/api", predictRouter);
 app.use("/api", fixturesRouter);
 
 // Server-rendered, crawlable SEO pages (/leagues, /league/:slug). Mounted outside

@@ -14,7 +14,7 @@ const router = Router();
 const SITE = "FootForm";
 
 // slug helpers ---------------------------------------------------------------
-function slugify(s) {
+export function slugify(s) {
   return String(s)
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // strip accents
     .toLowerCase()
@@ -284,6 +284,153 @@ router.get("/league/:slug/:matchSlug", async (req, res) => {
     description: `${fx.homeTeam?.name} vs ${fx.awayTeam?.name} (${league.name}) prediction` + (p.home != null ? `: ${fx.homeTeam?.name} win ${p.home}%, draw ${p.draw}%, ${fx.awayTeam?.name} win ${p.away}%` : "") + (m.over25 != null ? `, over 2.5 ${m.over25}%, BTTS ${m.btts}%` : "") + ". Model estimate — not betting advice.",
     canonical: `${base}/league/${req.params.slug}/${req.params.matchSlug}`,
     jsonLd,
+    body,
+  }));
+});
+
+// --- Shareable VIP prediction pages -----------------------------------------
+// /predict is a search box; searching resolves the fixture and lands on a unique,
+// shareable /predict/<home>-vs-<away> page rendering the VIP model's most likely
+// betting events with bookmaker odds. Server-rendered so links preview + load
+// instantly. The engine is /api/predict (see predict.js) — the established VIP
+// logic reached by team name.
+// Private gate for the /predict pages — same code as the app's other tools, held
+// server-side only. A correct entry sets a short-lived httpOnly cookie the server
+// reads on later requests; the pages also forward the code to the (gated) engine.
+const TOOLS_PASS = process.env.ODDS_GEN_PASS || "1211";
+function toolsAuthed(req) {
+  const c = (req.headers.cookie || "").match(/(?:^|;\s*)ff_tools=([^;]+)/);
+  const fromCookie = c ? decodeURIComponent(c[1]) : "";
+  return fromCookie === TOOLS_PASS || (req.get("x-odds-pass") || req.query.pass || "") === TOOLS_PASS;
+}
+const safeNext = (n) => (typeof n === "string" && n.startsWith("/predict") ? n : "/predict");
+function unlockPage(req, { next, error } = {}) {
+  const base = baseUrl(req);
+  return page({
+    base, title: `Enter access code | ${SITE}`, description: "This tool is private.",
+    canonical: `${base}/predict`,
+    body: `<h1>🔒 Private</h1>
+<p class="sub">This prediction tool is private. Enter the access code to continue.</p>
+<form action="/predict/unlock" method="post" style="display:flex;gap:8px;margin:16px 0;flex-wrap:wrap;max-width:360px">
+<input type="password" name="code" inputmode="numeric" autofocus placeholder="Access code" aria-label="Access code"
+ style="flex:1;min-width:150px;background:#0c1622;border:1px solid #16222f;color:#e6edf3;border-radius:8px;padding:12px 13px;font-size:16px;letter-spacing:4px;text-align:center" />
+<input type="hidden" name="next" value="${esc(safeNext(next))}" />
+<button style="background:#2ecc71;color:#04121f;font-weight:700;border:none;border-radius:8px;padding:12px 20px;font-size:15px;cursor:pointer">Unlock</button>
+</form>
+${error ? `<p style="color:#e74c3c;font-size:13px;margin:0">${esc(error)}</p>` : ""}`,
+  });
+}
+
+router.post("/predict/unlock", (req, res) => {
+  const code = String(req.body?.code || "");
+  const next = safeNext(req.body?.next);
+  if (code === TOOLS_PASS) {
+    res.cookie("ff_tools", TOOLS_PASS, { maxAge: 30 * 24 * 3600 * 1000, httpOnly: true, sameSite: "lax", path: "/" });
+    return res.redirect(302, next);
+  }
+  res.status(401).type("html").send(unlockPage(req, { next, error: "Incorrect code." }));
+});
+
+function searchForm(q = "") {
+  return `<form action="/predict" method="get" style="display:flex;gap:8px;margin:16px 0;flex-wrap:wrap">
+<input name="q" value="${esc(q)}" placeholder="e.g. Arsenal vs Chelsea" aria-label="Fixture"
+ style="flex:1;min-width:220px;background:#0c1622;border:1px solid #16222f;color:#e6edf3;border-radius:8px;padding:11px 13px;font-size:15px" />
+<button style="background:#2ecc71;color:#04121f;font-weight:700;border:none;border-radius:8px;padding:11px 20px;font-size:15px;cursor:pointer">Predict →</button>
+</form>`;
+}
+
+// Split "Arsenal vs Chelsea" / "Arsenal v Chelsea" / "Arsenal - Chelsea".
+function parseFixtureQuery(q) {
+  const parts = String(q).split(/\s+(?:vs?\.?|[-–—])\s+/i);
+  return { home: (parts[0] || "").trim(), away: (parts[1] || "").trim() };
+}
+
+router.get("/predict", async (req, res) => {
+  const base = baseUrl(req);
+  if (!toolsAuthed(req)) return res.type("html").send(unlockPage(req, { next: req.originalUrl }));
+  const q = String(req.query.q || "").trim();
+  if (q) {
+    const { home, away } = parseFixtureQuery(q);
+    if (home && away) return res.redirect(302, `/predict/${slugify(home)}-vs-${slugify(away)}`);
+    return res.type("html").send(page({
+      base, title: `Match prediction | ${SITE}`, description: "Enter a fixture to get the VIP model's most likely betting events.",
+      canonical: `${base}/predict`,
+      body: `<h1>⚡ Match prediction</h1>${searchForm(q)}<p class="sub">Couldn't read that — enter a fixture like <b>Arsenal vs Chelsea</b>.</p>`,
+    }));
+  }
+  res.set("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=604800");
+  res.type("html").send(page({
+    base,
+    title: `Match prediction — most likely betting events for any fixture | ${SITE}`,
+    description: `Enter any football fixture and get the VIP model's most likely betting events — win, goals, both teams to score and more — ranked by confidence with bookmaker odds.`,
+    canonical: `${base}/predict`,
+    body: `<h1>⚡ Match prediction</h1>
+<p class="sub">Type a fixture and get the VIP model's most likely betting events, ranked by confidence with bookmaker odds.</p>
+${searchForm()}
+<div class="grid">
+<a class="chip" href="/predict?q=${encodeURIComponent("Arsenal vs Chelsea")}">Arsenal vs Chelsea</a>
+<a class="chip" href="/predict?q=${encodeURIComponent("Real Madrid vs Barcelona")}">Real Madrid vs Barcelona</a>
+<a class="chip" href="/predict?q=${encodeURIComponent("Inter vs Juventus")}">Inter vs Juventus</a>
+</div>`,
+  }));
+});
+
+router.get("/predict/:slug", async (req, res) => {
+  const base = baseUrl(req);
+  if (!toolsAuthed(req)) return res.type("html").send(unlockPage(req, { next: req.originalUrl }));
+  const { home, away } = (() => {
+    const p = req.params.slug.split("-vs-");
+    return { home: (p[0] || "").replace(/-/g, " ").trim(), away: (p[1] || "").replace(/-/g, " ").trim() };
+  })();
+  const backForm = (q) => searchForm(q);
+  const fail = (msg, code = 404) => res.status(code).type("html").send(page({
+    base, title: `Match prediction | ${SITE}`, description: msg, canonical: `${base}/predict`,
+    body: `<h1>Match prediction</h1>${backForm(home && away ? `${home} vs ${away}` : "")}<p class="sub">${esc(msg)}</p><p><a href="/predict">Try another fixture →</a></p>`,
+  }));
+  if (!home || !away) return fail("Enter a fixture like 'Arsenal vs Chelsea'.");
+
+  let data;
+  try {
+    const r = await fetch(`${base}/api/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}&tz=UTC`, {
+      headers: { "x-odds-pass": TOOLS_PASS },
+    });
+    data = await r.json().catch(() => ({}));
+    if (!r.ok) return fail(data.error || "Couldn't build this prediction.", r.status === 500 ? 500 : 404);
+  } catch {
+    return fail("Couldn't build this prediction right now — try again shortly.", 502);
+  }
+
+  const { match, events = [], recommended, analysisPath, vip } = data;
+  const h = esc(match.home), a = esc(match.away);
+  const ko = match.kickoff
+    ? new Date(match.kickoff * 1000).toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC"
+    : "Kickoff TBC";
+
+  const odds = (e) => (e.bookOdds ? ` · book <b>@${e.bookOdds.toFixed(2)}</b>${e.bookmaker ? ` (${esc(e.bookmaker)})` : ""}` : "");
+  const evRow = (e, top) => `<div class="m"${top ? ' style="border-color:#2ecc71"' : ""}>
+<div class="t">${esc(e.selection)}${top ? ' <span style="color:#2ecc71;font-size:12px;font-weight:700">◆ most likely</span>' : ""}</div>
+<div class="p"><b>${e.probability}%</b> confidence${odds(e)} · ${esc(e.market)}</div>
+</div>`;
+
+  const canonical = `${base}/predict/${slugify(match.home)}-vs-${slugify(match.away)}`;
+  const topLine = recommended
+    ? `${recommended.selection} — ${recommended.probability}%${recommended.bookOdds ? ` @${recommended.bookOdds.toFixed(2)}` : ""}`
+    : "see the ranked events";
+
+  const body = `<p style="color:#6b8299;font-size:13px"><a href="/predict">← New prediction</a></p>
+<h1>${h} vs ${a}</h1>
+<p class="sub">${esc(match.leagueFlag)} ${esc(match.league)} · ${esc(ko)}${vip ? "" : " · below the VIP confidence floor — showing the model's read"}</p>
+${searchForm(`${match.home} vs ${match.away}`)}
+<h2 style="font-size:16px;margin:20px 0 6px">Most likely events</h2>
+${events.length ? events.map((e, i) => evRow(e, i === 0)).join("") : "<p class='sub'>No qualifying events for this fixture right now.</p>"}
+${analysisPath ? `<a class="cta" href="${esc(analysisPath)}">Full fixture analysis →</a>` : ""}`;
+
+  res.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
+  res.type("html").send(page({
+    base,
+    title: `${match.home} vs ${match.away} — prediction & top betting events | ${SITE}`,
+    description: `${match.home} vs ${match.away} (${match.league}): most likely — ${topLine}. VIP model's ranked betting events with bookmaker odds. Estimates only — not betting advice.`,
+    canonical,
     body,
   }));
 });

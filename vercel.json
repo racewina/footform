@@ -9,7 +9,9 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/leagues", "destination": "/api" },
-    { "source": "/league/(.*)", "destination": "/api" }
+    { "source": "/league/(.*)", "destination": "/api" },
+    { "source": "/predict", "destination": "/api" },
+    { "source": "/predict/(.*)", "destination": "/api" }
   ],
   "crons": [
     { "path": "/api/cron/warm", "schedule": "0 */2 * * *" }
