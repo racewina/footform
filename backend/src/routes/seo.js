@@ -331,75 +331,12 @@ router.post("/predict/unlock", (req, res) => {
   res.status(401).type("html").send(unlockPage(req, { next, error: "Incorrect code." }));
 });
 
-// Typeahead for the "Home vs Away" box: as you type each side, suggest matching
-// teams (gated /api/teams/suggest — the ff_tools cookie rides along automatically).
-// Segment-aware: it autocompletes whichever team the caret is in and preserves the
-// other side. Written to run standalone in the server-rendered page (no build step).
-const AUTOCOMPLETE_JS = `(function(){
-  var input=document.getElementById('ff-q'), box=document.getElementById('ff-sug');
-  if(!input||!box||input.__ac) return; input.__ac=true;
-  var items=[], active=-1, timer=null, lastQ='';
-  var SEP=/\\s+v(?:s)?(?:\\s+|$)/i;
-  function escj(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-  function seg(){
-    var v=input.value, caret=input.selectionStart==null?v.length:input.selectionStart, m=SEP.exec(v);
-    if(!m) return {part:'home',q:v.trim(),a:0,b:v.length};
-    var s=m.index, e=m.index+m[0].length;
-    if(caret<=s) return {part:'home',q:v.slice(0,s).trim(),a:0,b:s};
-    return {part:'away',q:v.slice(e).trim(),a:e,b:v.length};
-  }
-  function hide(){box.style.display='none';box.innerHTML='';items=[];active=-1;input.setAttribute('aria-expanded','false');}
-  function render(){
-    if(!items.length){hide();return;}
-    box.innerHTML=items.map(function(t,i){
-      return '<div data-i="'+i+'" role="option" style="display:flex;align-items:center;gap:9px;padding:10px 12px;cursor:pointer;border-bottom:1px solid #16222f;'+(i===active?'background:#13202e':'')+'">'
-        +'<span style="color:#e6edf3;font-size:14px">'+escj(t.name)+'</span>'
-        +(t.country?'<span style="color:#6b8299;font-size:12px;margin-left:auto">'+escj(t.country)+'</span>':'')
-        +'</div>';
-    }).join('');
-    box.style.display='block';input.setAttribute('aria-expanded','true');
-  }
-  function pick(t){
-    var g=seg(), v=input.value;
-    if(g.part==='home'){ input.value=t.name+(SEP.test(v)?v.slice(g.b):' vs '); }
-    else{ input.value=v.slice(0,g.a)+t.name; }
-    hide(); input.focus(); input.setSelectionRange(input.value.length,input.value.length);
-  }
-  function fetchSug(q){
-    fetch('/api/teams/suggest?q='+encodeURIComponent(q),{credentials:'same-origin'})
-      .then(function(r){return r.ok?r.json():{teams:[]};})
-      .then(function(j){items=(j.teams||[]).slice(0,8);active=-1;render();})
-      .catch(function(){hide();});
-  }
-  input.addEventListener('input',function(){
-    var q=seg().q;
-    if(q.length<3){hide();lastQ='';return;}
-    if(q===lastQ)return; lastQ=q;
-    clearTimeout(timer); timer=setTimeout(function(){fetchSug(q);},180);
-  });
-  input.addEventListener('keydown',function(e){
-    if(box.style.display==='none')return;
-    if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,items.length-1);render();}
-    else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0);render();}
-    else if(e.key==='Enter'){if(active>=0){e.preventDefault();pick(items[active]);}}
-    else if(e.key==='Escape'){hide();}
-  });
-  box.addEventListener('mousedown',function(e){
-    var el=e.target.closest('[data-i]'); if(!el)return; e.preventDefault(); pick(items[+el.getAttribute('data-i')]);
-  });
-  document.addEventListener('click',function(e){ if(!input.contains(e.target)&&!box.contains(e.target)) hide(); });
-})();`;
-
 function searchForm(q = "") {
-  return `<form action="/predict" method="get" autocomplete="off" style="display:flex;gap:8px;margin:16px 0;flex-wrap:wrap">
-<div style="position:relative;flex:1;min-width:220px">
-<input id="ff-q" name="q" value="${esc(q)}" placeholder="e.g. Arsenal vs Chelsea" aria-label="Fixture" aria-autocomplete="list" aria-expanded="false"
- style="width:100%;box-sizing:border-box;background:#0c1622;border:1px solid #16222f;color:#e6edf3;border-radius:8px;padding:11px 13px;font-size:15px" />
-<div id="ff-sug" role="listbox" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;background:#0c1622;border:1px solid #22323f;border-radius:8px;overflow-y:auto;max-height:320px;box-shadow:0 8px 24px rgba(0,0,0,.45)"></div>
-</div>
+  return `<form action="/predict" method="get" style="display:flex;gap:8px;margin:16px 0;flex-wrap:wrap">
+<input name="q" value="${esc(q)}" placeholder="e.g. Arsenal vs Chelsea" aria-label="Fixture"
+ style="flex:1;min-width:220px;background:#0c1622;border:1px solid #16222f;color:#e6edf3;border-radius:8px;padding:11px 13px;font-size:15px" />
 <button style="background:#2ecc71;color:#04121f;font-weight:700;border:none;border-radius:8px;padding:11px 20px;font-size:15px;cursor:pointer">Predict →</button>
-</form>
-<script>${AUTOCOMPLETE_JS}</script>`;
+</form>`;
 }
 
 // Split "Arsenal vs Chelsea" / "Arsenal v Chelsea" / "Arsenal - Chelsea".

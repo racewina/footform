@@ -8,7 +8,7 @@
 // so it works even for fixtures weeks out; the real bookmaker odds come from the
 // resolved fixture id.
 import { Router } from "express";
-import { fetchTeamByName, fetchHeadToHead, fetchFixtureOdds, fetchTeamSuggestions } from "../services/apifootball.js";
+import { fetchTeamByName, fetchHeadToHead, fetchFixtureOdds } from "../services/apifootball.js";
 import { analyzeMatchup } from "./analyze.js";
 import { buildVipSlips, goalWinCandidates } from "../services/vipbet.js";
 import { bestBookOddsForLeg } from "../services/valuebets.js";
@@ -57,23 +57,6 @@ function vipEvents(fx, league) {
     .map((c) => ({ market: c.market, marketKey: c.marketKey, selection: c.selection, probability: Math.round(c.prob) }));
   return { legs, vip: false };
 }
-
-// Team-name typeahead for the /predict search box (gated, same code). Returns up
-// to 8 matches for a 3+ char fragment. The browser sends the ff_tools cookie
-// automatically, so no header is needed from the page's script.
-router.get("/teams/suggest", async (req, res) => {
-  if (!toolsAuthed(req)) return res.status(401).json({ error: "This tool is private." });
-  const q = String(req.query.q || "").trim();
-  if (q.length < 3) return res.json({ teams: [] });
-  try {
-    const teams = await fetchTeamSuggestions(q, 8);
-    res.set("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
-    res.json({ teams });
-  } catch (err) {
-    console.error(`[teams/suggest] ${err.message}`);
-    res.status(500).json({ error: err.message, teams: [] });
-  }
-});
 
 router.get("/predict", async (req, res) => {
   if (!toolsAuthed(req)) return res.status(401).json({ error: "This tool is private." });

@@ -230,30 +230,6 @@ export async function fetchTeamByName(name) {
   return pick ? { id: pick.id, name: pick.name, country: pick.country || null, logo: pick.logo || null } : null;
 }
 
-// Up to `limit` team suggestions for a free-text fragment — powers the /predict
-// search typeahead. Same accent/punctuation sanitising as fetchTeamByName so
-// "São", "Grêmio", "Fenerbahçe" all search cleanly. Deduped by team id.
-export async function fetchTeamSuggestions(query, limit = 8) {
-  const q = String(query || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (q.length < 3) return []; // API-Football requires >=3 chars to search
-  const json = await request(`/teams?search=${encodeURIComponent(q)}`).catch(() => null);
-  const rows = Array.isArray(json?.response) ? json.response : [];
-  const out = [];
-  const seen = new Set();
-  for (const r of rows) {
-    const t = r.team;
-    if (!t?.id || seen.has(t.id)) continue;
-    seen.add(t.id);
-    out.push({ id: t.id, name: t.name, country: t.country || null, logo: t.logo || null });
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
 // The competitions a team plays this season. Used to find the shared domestic
 // league of a free-text matchup, so /analyze can build that league's Elo + goal
 // baselines and reach full model quality. Returns [{ id, name, type, country }].
