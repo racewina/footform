@@ -43,14 +43,40 @@ export default function App() {
   const navStackRef = useRef(navStack);
   navStackRef.current = navStack;
 
+  // A specific match to scroll to + highlight when we land on a league via a deep
+  // link (from a shared /predict page or an SEO page). Cleared on any manual nav.
+  const [focusMatch, setFocusMatch] = useState(null);
+
   const navigate = (id) => {
     if (String(id) === String(selectedLeague)) return;
     setNavStack((s) => [...s, selectedLeague]);
     setSelectedLeague(id);
+    setFocusMatch(null);
     // One browser history entry per forward navigation (same URL, no reload) so
     // a system/gesture back pops it and fires popstate.
     window.history.pushState({ ff: true }, "");
   };
+
+  // Deep link: /?league=<id>&date=<YYYY-MM-DD>&match=<fixtureId> opens that
+  // league's fixtures on that date and focuses the match — so "Open in the live
+  // app" from a shared prediction lands ON the fixture, not the full Today list.
+  // Read once on mount, then tidy the address bar back to "/".
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const lg = q.get("league");
+    if (!lg) return;
+    setSelectedLeague(lg);
+    const dt = q.get("date");
+    if (dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) {
+      const [y, m, d] = dt.split("-").map(Number);
+      const nd = new Date(y, m - 1, d);
+      nd.setHours(0, 0, 0, 0);
+      setViewDate(nd);
+    }
+    const mt = q.get("match");
+    if (mt) setFocusMatch(mt);
+    window.history.replaceState({}, "", "/");
+  }, []);
   // Both the system back and our button flow through popstate, so there's a
   // single source of truth and no divergence.
   const goBack = () => {
@@ -120,7 +146,7 @@ export default function App() {
                 : selectedLeague === "safe-results"
                   ? <SafeBetsResultsPage />
                   : selectedLeague
-                    ? <FixturesPage leagueId={selectedLeague} date={viewDate} onDateChange={setViewDate} />
+                    ? <FixturesPage leagueId={selectedLeague} date={viewDate} onDateChange={setViewDate} focusMatchId={focusMatch} />
                     : <NoLeaguePrompt />
           }
           </PullToRefresh>

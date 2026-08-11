@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 function ymd(d) {
@@ -174,7 +174,7 @@ function tint(hex) {
   return `rgba(${r},${g},${b},0.16)`;
 }
 
-export default function FixturesPage({ leagueId, date, onDateChange }) {
+export default function FixturesPage({ leagueId, date, onDateChange, focusMatchId }) {
   // The viewed date is app-wide (shared with the sidebar's date selector), so
   // picking a day in either place keeps the whole app in sync.
   const setDate = onDateChange;
@@ -537,6 +537,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
               season={season}
               highlight={filterMarket}
               live={liveMap.get(fx.id)}
+              focused={String(fx.id) === String(focusMatchId)}
               showLeague
             />
           ))}
@@ -556,6 +557,7 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
                 season={g.season}
                 highlight={filterMarket}
                 live={liveMap.get(fx.id)}
+                focused={String(fx.id) === String(focusMatchId)}
               />
             ))}
           </div>
@@ -565,8 +567,22 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
   );
 }
 
-function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
-  const [open, setOpen] = useState(false);
+function FixtureCard({ fixture, league, season, highlight, showLeague, live, focused }) {
+  const [open, setOpen] = useState(!!focused); // a deep-linked match opens expanded
+  const rootRef = useRef(null);
+  const [ring, setRing] = useState(false);
+  // Deep link (from a shared /predict or SEO page): scroll this match into view,
+  // expand it, and flash a highlight so it's obvious which one was opened.
+  useEffect(() => {
+    if (!focused) return;
+    const t0 = setTimeout(() => {
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setOpen(true);
+      setRing(true);
+    }, 60);
+    const t1 = setTimeout(() => setRing(false), 3000);
+    return () => { clearTimeout(t0); clearTimeout(t1); };
+  }, [focused]);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showPlayers, setShowPlayers] = useState(false);
   const [showCorners, setShowCorners] = useState(false);
@@ -589,7 +605,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live }) {
   const canShowCorners = !!(fixture.id && fixture.homeTeam?.id && fixture.awayTeam?.id);
 
   return (
-    <div style={styles.card}>
+    <div ref={rootRef} style={{ ...styles.card, ...(ring ? styles.cardFocused : {}) }}>
       {showLeague && league && (
         <div style={styles.cardLeague}>
           <span style={{ fontSize: 13 }}>{league.flag}</span>
@@ -1176,6 +1192,7 @@ const styles = {
   groupTitle: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "var(--text)" },
   groupCount: { fontSize: 12, color: "var(--text3)", background: "var(--bg3)", borderRadius: 10, padding: "1px 8px" },
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", flexShrink: 0 },
+  cardFocused: { border: "1px solid var(--accent)", boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)", transition: "box-shadow 0.3s ease" },
   cardLeague: { display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg3)" },
   cardLeagueName: { fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   cardHead: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", width: "100%", textAlign: "left" },

@@ -195,7 +195,7 @@ router.get("/league/:slug", async (req, res) => {
 <h1>${esc(league.flag)} ${esc(name)} predictions</h1>
 <p class="sub">${esc(league.country)} · ${lines ? `fixtures ${esc(when)}` : "upcoming fixtures"} with model win probabilities, over/under 1.5 &amp; 2.5 goals and both teams to score.</p>
 ${lines || `<p>No ${esc(name)} matches in the next two weeks. Check the live app for the latest fixtures.</p>`}
-<a class="cta" href="/">Open ${esc(name)} in the live app →</a>`;
+<a class="cta" href="/?league=${esc(id)}&date=${esc(date)}">Open ${esc(name)} in the live app →</a>`;
 
   res.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
   res.type("html").send(page({
@@ -275,7 +275,7 @@ router.get("/league/:slug/:matchSlug", async (req, res) => {
 <p class="sub">${esc(league.name)} · ${esc(koText)}</p>
 <p>${lead}</p>
 <div class="m">${rows.join("") || "<div class='p'>Prediction not available yet.</div>"}</div>
-<a class="cta" href="/">Open in the live app →</a>`;
+<a class="cta" href="/?league=${esc(id)}&date=${esc(date)}&match=${esc(fixtureId)}">Open this match in the live app →</a>`;
 
   res.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
   res.type("html").send(page({
