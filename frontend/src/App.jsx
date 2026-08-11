@@ -57,6 +57,25 @@ export default function App() {
     window.history.pushState({ ff: true }, "");
   };
 
+  // Open a specific fixture from a VIP / Safe Bets card: jump to its league's
+  // fixtures on the match's own date and focus (scroll + highlight) it — same
+  // landing as a /predict deep link, but in-app. Sets focus AFTER the nav so
+  // navigate()'s focus-clear doesn't wipe it.
+  const openFixture = (leagueId, kickoff, matchId) => {
+    if (!leagueId) return;
+    if (kickoff) {
+      const d = new Date(kickoff * 1000);
+      d.setHours(0, 0, 0, 0);
+      setViewDate(d);
+    }
+    if (String(leagueId) !== String(selectedLeague)) {
+      setNavStack((s) => [...s, selectedLeague]);
+      setSelectedLeague(String(leagueId));
+      window.history.pushState({ ff: true }, "");
+    }
+    setFocusMatch(matchId ? String(matchId) : null);
+  };
+
   // Deep link: /?league=<id>&date=<YYYY-MM-DD>&match=<fixtureId> opens that
   // league's fixtures on that date and focuses the match — so "Open in the live
   // app" from a shared prediction lands ON the fixture, not the full Today list.
@@ -140,9 +159,9 @@ export default function App() {
             : selectedLeague === "value"
               ? <ValueBetsPage />
               : selectedLeague === "vip"
-              ? <VipBetPage />
+              ? <VipBetPage onOpenFixture={openFixture} />
               : selectedLeague === "safebets"
-                ? <SafeBetsPage />
+                ? <SafeBetsPage onOpenFixture={openFixture} />
                 : selectedLeague === "safe-results"
                   ? <SafeBetsResultsPage />
                   : selectedLeague

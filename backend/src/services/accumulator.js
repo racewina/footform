@@ -54,6 +54,7 @@ export function buildLegPool(leagues) {
       const best = cands.reduce((a, b) => (b.prob > a.prob ? b : a));
       const leg = {
         matchId: fx.id,
+        leagueId: g.league?.id, // lets the UI deep-link the leg to the fixture
         home: fx.homeTeam?.name,
         away: fx.awayTeam?.name,
         homeLogo: fx.homeTeam?.logo,

@@ -19,7 +19,7 @@ function oddsColor(prob) {
   return "#e74c3c";
 }
 
-export default function VipBetPage() {
+export default function VipBetPage({ onOpenFixture }) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["vip"],
     queryFn: fetchVip,
@@ -67,17 +67,17 @@ export default function VipBetPage() {
         {featured.length > 0 && (
           <SectionTitle icon="⭐" title="Top Matches" subtitle="Headline competitions" />
         )}
-        {featured.map((slip) => <SlipCard key={`f-${slip.matchId}`} slip={slip} />)}
+        {featured.map((slip) => <SlipCard key={`f-${slip.matchId}`} slip={slip} onOpenFixture={onOpenFixture} />)}
 
         {southAmerica.length > 0 && (
           <SectionTitle icon="🌎" title="South America" subtitle="CONMEBOL · calibrated" />
         )}
-        {southAmerica.map((slip) => <SlipCard key={`sa-${slip.matchId}`} slip={slip} />)}
+        {southAmerica.map((slip) => <SlipCard key={`sa-${slip.matchId}`} slip={slip} onOpenFixture={onOpenFixture} />)}
 
         {(featured.length > 0 || southAmerica.length > 0) && others.length > 0 && (
           <SectionTitle icon="💎" title="More VIP Builders" subtitle="Across all leagues" />
         )}
-        {others.map((slip) => <SlipCard key={slip.matchId} slip={slip} />)}
+        {others.map((slip) => <SlipCard key={slip.matchId} slip={slip} onOpenFixture={onOpenFixture} />)}
       </div>
     </div>
   );
@@ -93,13 +93,18 @@ function SectionTitle({ icon, title, subtitle }) {
   );
 }
 
-function SlipCard({ slip }) {
-  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount } = slip;
+function SlipCard({ slip, onOpenFixture }) {
+  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount, leagueId, matchId } = slip;
   const ko = kickoff
     ? new Date(kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "--:--";
+  const clickable = !!(onOpenFixture && leagueId);
+  const open = () => clickable && onOpenFixture(leagueId, kickoff, matchId);
   return (
-    <div style={styles.card}>
+    <div
+      style={{ ...styles.card, ...(clickable ? { cursor: "pointer" } : {}) }}
+      {...(clickable ? { role: "button", tabIndex: 0, onClick: open, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }, title: "Open this fixture" } : {})}
+    >
       <div style={styles.cardHead}>
         <div style={{ minWidth: 0 }}>
           <div style={styles.cardTitle}>

@@ -155,6 +155,7 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
 
   return {
     matchId: fx.id,
+    leagueId: g.league?.id, // lets the UI deep-link the card to the fixture
     tier: { name: `${fx.homeTeam?.name} v ${fx.awayTeam?.name}`, subtitle: lean },
     lean,
     home: fx.homeTeam?.name,

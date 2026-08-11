@@ -19,7 +19,7 @@ function oddsColor(prob) {
   return "#e74c3c";
 }
 
-export default function SafeBetsPage() {
+export default function SafeBetsPage({ onOpenFixture }) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["accumulators"],
     queryFn: fetchAccumulators,
@@ -46,13 +46,13 @@ export default function SafeBetsPage() {
           <p style={styles.empty}>No scheduled matches today to build a slip from.</p>
         )}
         {!isLoading && !isError && data?.totalMatches > 0 &&
-          slips.map((slip) => <SlipCard key={`${slip.target.lo}-${slip.target.hi}`} slip={slip} />)}
+          slips.map((slip) => <SlipCard key={`${slip.target.lo}-${slip.target.hi}`} slip={slip} onOpenFixture={onOpenFixture} />)}
       </div>
     </div>
   );
 }
 
-function SlipCard({ slip }) {
+function SlipCard({ slip, onOpenFixture }) {
   const { target, legs, combinedOdds, combinedProbability, inRange, legCount } = slip;
   return (
     <div style={styles.card}>
@@ -80,17 +80,22 @@ function SlipCard({ slip }) {
         <div style={styles.warn}>Not enough matches today to reach this range.</div>
       )}
 
-      {legs.map((leg) => <Leg key={leg.matchId} leg={leg} />)}
+      {legs.map((leg) => <Leg key={leg.matchId} leg={leg} onOpenFixture={onOpenFixture} />)}
     </div>
   );
 }
 
-function Leg({ leg }) {
+function Leg({ leg, onOpenFixture }) {
   const kickoff = leg.kickoff
     ? new Date(leg.kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "--:--";
+  const clickable = !!(onOpenFixture && leg.leagueId);
+  const open = () => clickable && onOpenFixture(leg.leagueId, leg.kickoff, leg.matchId);
   return (
-    <div style={styles.leg}>
+    <div
+      style={{ ...styles.leg, ...(clickable ? { cursor: "pointer" } : {}) }}
+      {...(clickable ? { role: "button", tabIndex: 0, onClick: open, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }, title: "Open this fixture" } : {})}
+    >
       <div style={styles.legMain}>
         <div style={styles.legMatch}>
           <span style={styles.legTeams}>{leg.home} v {leg.away}</span>
