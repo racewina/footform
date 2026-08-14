@@ -90,3 +90,10 @@ export const LEAGUES = [
 export const LEAGUES_BY_ID = Object.fromEntries(
   LEAGUES.map((l) => [l.id, l])
 );
+
+// Countries kept OUT of the model's automatic bet selections (VIP, Safe Bets,
+// Blend Bets) — small Nordic/Baltic leagues the user doesn't want staked. They
+// still appear in Today's Matches, league views and the generators (user's own
+// pick); this only bars them from the auto-selected slips. By country so every
+// division is covered.
+export const NO_BET_COUNTRIES = new Set(["Iceland", "Finland", "Estonia"]);

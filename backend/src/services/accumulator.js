@@ -9,6 +9,8 @@
 // side of two-way markets) and add the safest legs first until the running
 // odds reach the requested range.
 
+import { NO_BET_COUNTRIES } from "../data/leagues.js";
+
 const round2 = (x) => Math.round(x * 100) / 100;
 
 // Minimum fair odds for a leg to be eligible. Anything shorter (a selection the
@@ -48,6 +50,7 @@ export function buildLegPool(leagues) {
   const pool = [];
   for (const g of leagues || []) {
     if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
+    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
     for (const fx of g.fixtures || []) {
       const cands = fixtureCandidates(fx);
       if (!cands.length) continue;

@@ -11,7 +11,7 @@
 // is a real edge, whereas combining different matches just needs two dominations
 // at once (the flaw that sank the old VIP).
 
-import { LEAGUES } from "../data/leagues.js";
+import { LEAGUES, NO_BET_COUNTRIES } from "../data/leagues.js";
 
 const round2 = (x) => Math.round(x * 100) / 100;
 
@@ -199,6 +199,7 @@ export function buildVipSlips(leagues, cornerMap = {}, maxSlips = BUILDER_MAX, f
   const builders = [];
   for (const g of leagues || []) {
     if (g.league?.friendly) continue; // friendlies are too unpredictable for VIP slips
+    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
     for (const fx of g.fixtures || []) {
       const b = matchBuilder(fx, g, cornerMap[fx.id] || null, floors);
       if (b) builders.push(b);
