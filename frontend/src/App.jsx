@@ -259,6 +259,8 @@ const LEAGUE_NAMES = {
   "170": { name: "League One", flag: "🇨🇳" },
   "292": { name: "K League 1", flag: "🇰🇷" },
   "293": { name: "K League 2", flag: "🇰🇷" },
+  "98": { name: "J1 League", flag: "🇯🇵" },
+  "99": { name: "J2 League", flag: "🇯🇵" },
   "288": { name: "Premier Soccer League", flag: "🇿🇦" },
   "2":  { name: "Champions League", flag: "🇪🇺" },
   "3": { name: "Europa League", flag: "🇪🇺" },
