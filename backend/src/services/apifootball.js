@@ -204,25 +204,39 @@ export async function fetchTeamLastMatches(teamId, page = 0) {
 // Fold a string to its accent-stripped, lower-cased form for comparison
 // ("Confiança" ⇒ "confianca").
 const foldName = (s) =>
-  String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// Resolve a free-text team name to a team { id, name, country, logo }. Used by
-// the /analyze entry point so callers can pass "Real Madrid" instead of an id.
-// Prefers an exact (accent-insensitive) name match, else the first result.
-export async function fetchTeamByName(name) {
-  const raw = String(name || "").trim();
-  // API-Football's search field rejects anything but alphanumerics and spaces, so
-  // strip accents (ç, ã, ö, …) and punctuation (São → Sao, F.C. → F C) before the
-  // call — its fuzzy match still finds the real team. Otherwise a name like
-  // "Confiança" 400s outright.
-  const q = raw
+// API-Football's search rejects anything but alphanumerics + spaces, so strip
+// accents (ç, ã) and punctuation (São -> Sao, F.C. -> F C) before searching.
+function searchQuery(raw) {
+  return raw
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (q.length < 3) return null; // API-Football requires >=3 chars to search
-  const json = await request(`/teams?search=${encodeURIComponent(q)}`);
-  const rows = Array.isArray(json?.response) ? json.response : [];
+}
+async function searchTeamRows(q) {
+  if (!q || q.length < 3) return []; // API-Football requires >=3 chars to search
+  const json = await request(`/teams?search=${encodeURIComponent(q)}`).catch(() => null);
+  return Array.isArray(json?.response) ? json.response : [];
+}
+
+// Resolve a free-text team name to a team { id, name, country, logo }. Used by
+// /analyze and /predict. Prefers an exact (accent/punctuation-insensitive) match,
+// else the first result.
+export async function fetchTeamByName(name) {
+  const raw = String(name || "").trim();
+  const q = searchQuery(raw);
+  if (q.length < 3) return null;
+  let rows = await searchTeamRows(q);
+  // A compound / hyphenated club is stored WITH the hyphen ("Lokeren-Temse"), so
+  // a space-joined full search ("Lokeren Temse") finds nothing (API-Football
+  // matches substrings). Retry on the longest word; the fold match still picks
+  // the right club out of the results.
+  if (!rows.length && q.includes(" ")) {
+    const word = q.split(/\s+/).filter((w) => w.length >= 3).sort((a, b) => b.length - a.length)[0];
+    if (word) rows = await searchTeamRows(word);
+  }
   if (!rows.length) return null;
   const folded = foldName(raw);
   const exact = rows.find((r) => foldName(r.team?.name) === folded);
