@@ -35,7 +35,7 @@ import { buildAccumulators, buildLegPool } from "../services/accumulator.js";
 import { buildVipSlips, goalWinCandidates, VIP_MIN_PROB, VIP_MAX_PROB, MARQUEE_LEAGUES, SOUTH_AMERICAN_LEAGUES, SA_FLOOR } from "../services/vipbet.js";
 import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
-import { oddsCandidates, bestInRange, oddsRangeLadder } from "../services/oddsGenerator.js";
+import { oddsCandidates, bestInRange, oddsRangeLadder, filterByMarket } from "../services/oddsGenerator.js";
 import { buildEloModel } from "../services/elo.js";
 import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
 
@@ -1823,6 +1823,8 @@ router.get("/odds-generator", async (req, res) => {
   const tz = req.query.tz;
   const targetDate = req.query.date || formatDate(new Date(), tz);
   const within = ["1", "3", "6"].includes(String(req.query.within)) ? String(req.query.within) : "all";
+  const ODDS_GEN_MARKETS = new Set(["all", "goals", "over", "under", "corner1h", "cornertotal", "dc"]);
+  const market = ODDS_GEN_MARKETS.has(String(req.query.market)) ? String(req.query.market) : "all";
   const oddsMin = Number(req.query.oddsMin) > 1 ? Number(req.query.oddsMin) : 1.01;
   const oddsMax = Number(req.query.oddsMax) >= oddsMin ? Number(req.query.oddsMax) : 1000;
   const leagueIds = String(req.query.leagues || "")
@@ -1830,10 +1832,10 @@ router.get("/odds-generator", async (req, res) => {
 
   const ladder = oddsRangeLadder();
   if (!leagueIds.length) {
-    return res.json({ date: targetDate, within, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder, count: 0, matches: [] });
+    return res.json({ date: targetDate, within, market, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder, count: 0, matches: [] });
   }
 
-  const key = `${leagueIds.slice().sort().join("_")}:${within}:${oddsMin}-${oddsMax}`;
+  const key = `${leagueIds.slice().sort().join("_")}:${within}:${market}:${oddsMin}-${oddsMax}`;
   const cacheKey = `odds-gen:${key}:${targetDate}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
@@ -1880,6 +1882,7 @@ router.get("/odds-generator", async (req, res) => {
       // Corner projections built purely off baselines (no real history) aren't
       // trustworthy — drop them so the pick falls back to the best goal market.
       if (!cornersAvailable) cands = cands.filter((c) => c.group !== "Corners");
+      cands = filterByMarket(cands, market); // restrict to the chosen market family
       const pick = bestInRange(cands, oddsMin, oddsMax);
       if (!pick) continue;
       matches.push({
@@ -1898,7 +1901,7 @@ router.get("/odds-generator", async (req, res) => {
     matches.sort((a, b) => b.pick.probability - a.pick.probability);
 
     const result = {
-      date: targetDate, within, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder,
+      date: targetDate, within, market, oddsRange: { min: oddsMin, max: oddsMax }, oddsLadder: ladder,
       scanned: capped.length, count: matches.length, matches,
     };
     cacheSet(cacheKey, result, TTL.FIXTURES);

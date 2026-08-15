@@ -21,10 +21,10 @@ const PASS_KEY = "footform_og_pass";
 
 class UnauthorizedError extends Error {}
 
-async function fetchBoard({ leagues, dateStr, within, min, max, pass }) {
+async function fetchBoard({ leagues, dateStr, within, market, min, max, pass }) {
   const res = await fetch(
     `/api/odds-generator?leagues=${leagues}&date=${dateStr}&tz=${encodeURIComponent(TZ)}` +
-    `&within=${within}&oddsMin=${min}&oddsMax=${max}`,
+    `&within=${within}&market=${market}&oddsMin=${min}&oddsMax=${max}`,
     { headers: { "x-odds-pass": pass || "" } }
   );
   if (res.status === 401) throw new UnauthorizedError("This tool is private.");
@@ -49,6 +49,17 @@ const WINDOWS = [
   { key: "1", label: "Next 1h" },
   { key: "3", label: "Next 3h" },
   { key: "6", label: "Next 6h" },
+];
+
+// Market-family filter — restricts which market the engine may pick per fixture.
+const MARKETS = [
+  { key: "all", label: "All markets" },
+  { key: "goals", label: "Goals" },
+  { key: "corner1h", label: "1st half corners" },
+  { key: "cornertotal", label: "Total corners" },
+  { key: "over", label: "Over" },
+  { key: "under", label: "Under" },
+  { key: "dc", label: "Double chance" },
 ];
 
 // Odds ladder in 0.10-wide buckets (matches the backend). Built from integers to
@@ -88,6 +99,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   const dateStr = ymd(viewDate);
   const isToday = dateStr === ymd(new Date());
   const [within, setWithin] = useState("all");
+  const [market, setMarket] = useState("all");
   const [picked, setPicked] = useState([]);     // selected league ids (strings)
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [generated, setGenerated] = useState(null);
@@ -154,8 +166,8 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
     if (!picked.length) return;
     const leaguesCsv = picked.join(",");
     setGenerated({
-      leagues: leaguesCsv, dateStr, within, min: rangeObj.min, max: rangeObj.max,
-      key: `${leaguesCsv}:${dateStr}:${within}:${rangeObj.key}`,
+      leagues: leaguesCsv, dateStr, within, market, min: rangeObj.min, max: rangeObj.max,
+      key: `${leaguesCsv}:${dateStr}:${within}:${market}:${rangeObj.key}`,
     });
   };
 
@@ -230,6 +242,13 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
             title={isToday ? "Only scan matches kicking off within this window" : "Time window applies to today's matches"}
           >
             {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
+          </select>
+        </label>
+
+        <label style={styles.field}>
+          <span style={styles.fieldLabel}>Market</span>
+          <select style={{ ...styles.select, minWidth: 150 }} value={market} onChange={(e) => setMarket(e.target.value)}>
+            {MARKETS.map((mk) => <option key={mk.key} value={mk.key}>{mk.label}</option>)}
           </select>
         </label>
 

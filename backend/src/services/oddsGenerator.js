@@ -51,6 +51,9 @@ function goalCandidates(fx, best) {
     { key: "over15", group: "Total Goals", selection: "Over 1.5 goals", oddKey: "over15", prob: m.over15 },
     { key: "over25", group: "Total Goals", selection: "Over 2.5 goals", oddKey: "over25", prob: m.over25 },
     { key: "over35", group: "Total Goals", selection: "Over 3.5 goals", oddKey: "over35", prob: m.over35 },
+    { key: "under15", group: "Total Goals", selection: "Under 1.5 goals", oddKey: "under15", prob: typeof m.over15 === "number" ? 100 - m.over15 : undefined },
+    { key: "under25", group: "Total Goals", selection: "Under 2.5 goals", oddKey: "under25", prob: typeof m.over25 === "number" ? 100 - m.over25 : undefined },
+    { key: "under35", group: "Total Goals", selection: "Under 3.5 goals", oddKey: "under35", prob: typeof m.over35 === "number" ? 100 - m.over35 : undefined },
     { key: "btts", group: "BTTS", selection: "Both teams to score", oddKey: "bttsYes", prob: m.btts },
   ];
 
@@ -109,6 +112,21 @@ export function oddsCandidates(fx, cornerPred, odds) {
     ...goalCandidates(fx, odds?.best),
     ...cornerCandidates(fx, cornerPred, odds?.corners),
   ];
+}
+
+// Narrow a fixture's candidates to one market family (the /odds-generator market
+// filter). "all" or anything unrecognised → unchanged. Over/Under cover TOTAL
+// goals; corners split by half; "goals" is the team-scoring + BTTS markets.
+export function filterByMarket(cands, market) {
+  switch (market) {
+    case "goals":       return cands.filter((c) => c.group === "Team Goals" || c.group === "BTTS");
+    case "over":        return cands.filter((c) => c.group === "Total Goals" && /\bOver\b/.test(c.selection));
+    case "under":       return cands.filter((c) => c.group === "Total Goals" && /\bUnder\b/.test(c.selection));
+    case "corner1h":    return cands.filter((c) => c.group === "Corners" && /1st half/.test(c.selection));
+    case "cornertotal": return cands.filter((c) => c.group === "Corners" && !/1st half/.test(c.selection));
+    case "dc":          return cands.filter((c) => c.group === "Double Chance");
+    default:            return cands; // all
+  }
 }
 
 // The single highest-confidence candidate whose real book odds fall in [min, max].
