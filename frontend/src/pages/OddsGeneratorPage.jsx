@@ -112,8 +112,18 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
     setGenerated(null);
   };
 
-  const withinCutoff = isToday && within !== "all" ? Date.now() + Number(within) * 3600 * 1000 : Infinity;
-  const inWindow = (ts) => withinCutoff === Infinity || !ts || ts * 1000 <= withinCutoff;
+  const nowMs = Date.now();
+  const withinCutoff = isToday && within !== "all" ? nowMs + Number(within) * 3600 * 1000 : Infinity;
+  // A league qualifies for a time window only if it has an UPCOMING match inside it —
+  // kicking off from now (small grace for a just-started one) up to the cutoff. Without
+  // the lower bound, matches that already kicked off earlier today would leak in and the
+  // window wouldn't actually narrow the league list.
+  const inWindow = (ts) => {
+    if (withinCutoff === Infinity) return true;
+    if (!ts) return false;
+    const ms = ts * 1000;
+    return ms >= nowMs - 10 * 60 * 1000 && ms <= withinCutoff;
+  };
 
   const { data: sel } = useQuery({
     queryKey: ["oddsgen-leagues", dateStr],
