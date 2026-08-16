@@ -12,6 +12,7 @@ import PropsFinderPage from "./pages/PropsFinderPage";
 import OddsGeneratorPage from "./pages/OddsGeneratorPage";
 import CornerGeneratorPage from "./pages/CornerGeneratorPage";
 import EventGeneratorPage from "./pages/EventGeneratorPage";
+import Team2PlusScanPage from "./pages/Team2PlusScanPage";
 import ToolGate from "./components/ToolGate";
 import RoiPage from "./pages/RoiPage";
 import PullToRefresh from "./components/PullToRefresh";
@@ -154,6 +155,8 @@ export default function App() {
               ? <ToolGate title="Corner Generator"><CornerGeneratorPage date={viewDate} onDateChange={setViewDate} onOpenLeague={navigate} /></ToolGate>
             : selectedLeague === "event-gen"
               ? <ToolGate title="Event Generator"><EventGeneratorPage date={viewDate} /></ToolGate>
+            : selectedLeague === "team2plus-scan"
+              ? <ToolGate title="2+ Goals Scan"><Team2PlusScanPage /></ToolGate>
             : selectedLeague === "roi"
               ? <RoiPage />
             : selectedLeague === "value"
@@ -186,6 +189,7 @@ const LEAGUE_NAMES = {
   "odds-gen": { name: "Odds Generator", flag: "🎰" },
   "corner-gen": { name: "Corner Generator", flag: "⛳" },
   "event-gen": { name: "Event Generator", flag: "⚡" },
+  "team2plus-scan": { name: "2+ Goals Scan", flag: "📊" },
   "value": { name: "Value Bets", flag: "📈" },
   "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

@@ -279,6 +279,20 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           <button
             style={{
               ...styles.todayItem,
+              ...(String(selectedId) === "team2plus-scan" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("team2plus-scan");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>📊</span>
+            <span style={styles.itemName}>2+ Goals Scan</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
               ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
