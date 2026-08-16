@@ -11,7 +11,9 @@
     { "source": "/leagues", "destination": "/api" },
     { "source": "/league/(.*)", "destination": "/api" },
     { "source": "/predict", "destination": "/api" },
-    { "source": "/predict/(.*)", "destination": "/api" }
+    { "source": "/predict/(.*)", "destination": "/api" },
+    { "source": "/scan", "destination": "/api" },
+    { "source": "/scan/(.*)", "destination": "/api" }
   ],
   "crons": [
     { "path": "/api/cron/warm", "schedule": "0 */2 * * *" }
