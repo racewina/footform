@@ -303,7 +303,7 @@ function toolsAuthed(req) {
   const fromCookie = c ? decodeURIComponent(c[1]) : "";
   return fromCookie === TOOLS_PASS || (req.get("x-odds-pass") || req.query.pass || "") === TOOLS_PASS;
 }
-const safeNext = (n) => (typeof n === "string" && n.startsWith("/predict") ? n : "/predict");
+const safeNext = (n) => (typeof n === "string" && (n.startsWith("/predict") || n.startsWith("/scan")) ? n : "/predict");
 function unlockPage(req, { next, error } = {}) {
   const base = baseUrl(req);
   return page({
@@ -430,6 +430,152 @@ ${analysisPath ? `<a class="cta" href="${esc(analysisPath)}">Full fixture analys
     base,
     title: `${match.home} vs ${match.away} — prediction & top betting events | ${SITE}`,
     description: `${match.home} vs ${match.away} (${match.league}): most likely — ${topLine}. VIP model's ranked betting events with bookmaker odds. Estimates only — not betting advice.`,
+    canonical,
+    body,
+  }));
+});
+
+// --- Shareable 2+ Goals Scan pages ------------------------------------------
+// /scan is a league picker; picking one lands on a unique, shareable
+// /scan/<id>-<league> page rendering that league's "team to score 2+ goals" read:
+// today's upcoming picks with bookmaker odds, plus the model's backtested hit rate
+// over recent finished matches. Server-rendered so links preview + load instantly.
+// The engine is /api/team-2plus/scan (see fixtures.js) — the same scanner the app
+// uses. Gated by the same ff_tools cookie / code as /predict.
+const scanUrl = (l) => `/scan/${l.id}-${leagueSlug(l)}`;
+
+// Adjacent day in UTC (n = -1 / +1), as YYYY-MM-DD.
+function shiftYmd(ymd, n) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return ymdUTC(dt);
+}
+const prettyUtc = (ymd) => {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+};
+
+router.get("/scan", async (req, res) => {
+  const base = baseUrl(req);
+  if (!toolsAuthed(req)) return res.type("html").send(unlockPage(req, { next: req.originalUrl }));
+
+  // Picking a league (GET form or a chip) lands on its own shareable page.
+  const picked = LEAGUES_BY_ID[String(req.query.league || "").trim()];
+  if (picked) return res.redirect(302, scanUrl(picked));
+
+  const byCountry = LEAGUES.reduce((acc, l) => { (acc[l.country] ||= []).push(l); return acc; }, {});
+  const options = Object.entries(byCountry)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([country, ls]) =>
+      `<optgroup label="${esc(country)}">` +
+      ls.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("") +
+      `</optgroup>`).join("");
+  const popular = ["39", "140", "135", "78", "61", "71"].map((id) => LEAGUES_BY_ID[id]).filter(Boolean);
+
+  res.set("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=604800");
+  res.type("html").send(page({
+    base,
+    title: `2+ goals scan — team to score 2+ picks by league | ${SITE}`,
+    description: `Pick a league to see the model's "team to score 2+ goals" picks for upcoming fixtures with bookmaker odds, plus its backtested hit rate.`,
+    canonical: `${base}/scan`,
+    body: `<h1>📊 2+ goals scan</h1>
+<p class="sub">Pick a league to see the model's <b>team to score 2+ goals</b> picks for upcoming fixtures with bookmaker odds — plus how the pick has backtested.</p>
+<form action="/scan" method="get" style="display:flex;gap:8px;margin:16px 0;flex-wrap:wrap">
+<select name="league" aria-label="League" style="flex:1;min-width:220px;background:#0c1622;border:1px solid #16222f;color:#e6edf3;border-radius:8px;padding:11px 13px;font-size:15px">
+<option value="">Select a league…</option>
+${options}
+</select>
+<button style="background:#2ecc71;color:#04121f;font-weight:700;border:none;border-radius:8px;padding:11px 20px;font-size:15px;cursor:pointer">Scan →</button>
+</form>
+<div class="grid">
+${popular.map((l) => `<a class="chip" href="${scanUrl(l)}">${esc(l.flag)} ${esc(l.name)}</a>`).join("")}
+</div>`,
+  }));
+});
+
+router.get("/scan/:idslug", async (req, res) => {
+  const base = baseUrl(req);
+  if (!toolsAuthed(req)) return res.type("html").send(unlockPage(req, { next: req.originalUrl }));
+
+  const league = LEAGUES_BY_ID[String(parseInt(req.params.idslug, 10))];
+  const fail = (msg, code = 404) => res.status(code).type("html").send(page({
+    base, title: `2+ goals scan | ${SITE}`, description: msg, canonical: `${base}/scan`,
+    body: `<h1>2+ goals scan</h1><p class="sub">${esc(msg)}</p><p><a href="/scan">Pick a league →</a></p>`,
+  }));
+  if (!league) return fail("That league isn't covered — pick one from the list.");
+
+  const mode = req.query.mode === "backtest" ? "backtest" : "upcoming";
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date)) ? String(req.query.date) : ymdUTC();
+  const within = ["1", "3", "6"].includes(String(req.query.within)) ? String(req.query.within) : "all";
+  const canonical = `${base}${scanUrl(league)}`;
+
+  // The engine (gated) — self-fetch with the tools pass, same as /predict.
+  const call = (qs) => fetch(`${base}/api/team-2plus/scan?leagues=${league.id}&${qs}`, { headers: { "x-odds-pass": TOOLS_PASS } })
+    .then((r) => r.json().catch(() => ({}))).catch(() => ({}));
+
+  let bt, up;
+  try {
+    [bt, up] = await Promise.all([
+      call("mode=backtest&days=120&tz=UTC"),
+      mode === "upcoming" ? call(`mode=upcoming&date=${date}&within=${within}&tz=UTC`) : Promise.resolve(null),
+    ]);
+  } catch {
+    return fail("Couldn't build this scan right now — try again shortly.", 502);
+  }
+
+  const s = bt?.summary;
+  const headline = s && s.total
+    ? `Over the last <b>${s.total}</b> finished matches, the model's 2+ pick hit <b>${s.hitRate}%</b> (avg confidence ${s.avgProb}%).`
+    : `Backtest is still warming up for this league.`;
+
+  // Mode / date / window navigation, all as plain links (no JS needed).
+  const modeTabs = `<div class="grid" style="margin:2px 0 14px">
+<a class="chip" href="${scanUrl(league)}"${mode === "upcoming" ? ' style="border-color:#2ecc71;color:#2ecc71"' : ""}>Upcoming picks</a>
+<a class="chip" href="${scanUrl(league)}?mode=backtest"${mode === "backtest" ? ' style="border-color:#2ecc71;color:#2ecc71"' : ""}>Backtest history</a>
+</div>`;
+
+  let main;
+  if (mode === "backtest") {
+    const rows = (bt?.rows || []).slice(0, 60);
+    main = `<h2 style="font-size:16px;margin:20px 0 6px">Graded history — last 120 days</h2>` +
+      (rows.length ? rows.map((r) => `<div class="m"${r.hit ? ' style="border-color:#2ecc71"' : ""}>
+<div class="t">${esc(r.home)} ${r.homeScore}-${r.awayScore} ${esc(r.away)}</div>
+<div class="p">Pick: <b>${esc(r.team)}</b> to score 2+ · ${r.prob}% · ${r.hit ? '<b style="color:#2ecc71">HIT ✓</b>' : '<span style="color:#e74c3c">miss ✗</span>'} · ${esc(prettyUtc(r.date))}</div>
+</div>`).join("") : "<p class='sub'>No finished matches graded yet.</p>");
+  } else {
+    const rows = up?.rows || [];
+    const withinLinks = ["all", "1", "3", "6"].map((w) => {
+      const label = w === "all" ? "All day" : `${w}h`;
+      const href = `${scanUrl(league)}?date=${date}` + (w === "all" ? "" : `&within=${w}`);
+      return `<a class="chip" href="${href}"${within === w ? ' style="border-color:#2ecc71;color:#2ecc71"' : ""}>${label}</a>`;
+    }).join("");
+    const dateBar = `<div class="grid" style="align-items:center;margin:2px 0 12px">
+<a class="chip" href="${scanUrl(league)}?date=${shiftYmd(date, -1)}${within === "all" ? "" : `&within=${within}`}">‹ Prev</a>
+<span class="chip" style="border-color:#2a3a4a">${esc(prettyUtc(date))}${date === ymdUTC() ? " · Today" : ""}</span>
+<a class="chip" href="${scanUrl(league)}?date=${shiftYmd(date, 1)}${within === "all" ? "" : `&within=${within}`}">Next ›</a>
+</div>
+<div class="grid" style="margin:0 0 14px">${withinLinks}</div>`;
+    const evRow = (r) => `<div class="m">
+<div class="t">${esc(r.home)} vs ${esc(r.away)}</div>
+<div class="p">Pick: <b>${esc(r.team)}</b> to score 2+ · <b>${r.prob}%</b>${r.bookOdds ? ` · book <b>@${r.bookOdds.toFixed(2)}</b>${r.bookmaker ? ` (${esc(r.bookmaker)})` : ""}` : ""}${r.kickoff ? ` · ${new Date(r.kickoff * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC` : ""}</div>
+</div>`;
+    main = `<h2 style="font-size:16px;margin:20px 0 6px">Upcoming picks</h2>${dateBar}` +
+      (rows.length ? rows.map(evRow).join("") : "<p class='sub'>No upcoming fixtures for this date/window.</p>");
+  }
+
+  const body = `<p style="color:#6b8299;font-size:13px"><a href="/scan">← All leagues</a></p>
+<h1>${esc(league.flag)} ${esc(league.name)} — 2+ goals scan</h1>
+<p class="sub">${headline}</p>
+${modeTabs}
+${main}
+<a class="cta" href="/">Open in the live app →</a>`;
+
+  res.set("Cache-Control", "public, s-maxage=600, stale-while-revalidate=86400");
+  res.type("html").send(page({
+    base,
+    title: `${league.name} — team to score 2+ goals picks | ${SITE}`,
+    description: (s && s.total ? `${league.name}: the model's 2+ goals pick has hit ${s.hitRate}% over ${s.total} recent matches. ` : "") + `Upcoming "team to score 2+ goals" picks with bookmaker odds. Estimates only — not betting advice.`,
     canonical,
     body,
   }));
