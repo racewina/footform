@@ -2017,10 +2017,12 @@ router.get("/team-2plus/scan", async (req, res) => {
           const scored = pick.side === "home" ? m.homeScore : m.awayScore;
           const hit = typeof scored === "number" && scored >= 2;
           hits += hit ? 1 : 0; probSum += pick.prob;
+          const mk = m.prediction?.markets || {};
           rows.push({
             matchId: m.id, date, home: m.homeTeam?.name, away: m.awayTeam?.name,
             homeScore: m.homeScore, awayScore: m.awayScore,
-            team: pick.team, prob: pick.prob, hit,
+            team: pick.team, side: pick.side, prob: pick.prob, hit,
+            homeProb: Math.round(mk.home2Plus), awayProb: Math.round(mk.away2Plus),
           });
         }
       }
@@ -2054,17 +2056,30 @@ router.get("/team-2plus/scan", async (req, res) => {
     );
     const rows = [];
     for (const fx of fixtures) {
-      const pick = team2PlusPick(fx.prediction.markets, fx.homeTeam.name, fx.awayTeam.name);
+      const mk = fx.prediction.markets;
+      const pick = team2PlusPick(mk, fx.homeTeam.name, fx.awayTeam.name);
       if (!pick) continue;
       const odds = await getFixtureOdds(fx.id).catch(() => null);
-      const priced = odds?.best
-        ? bestBookOddsForLeg(odds.best, { marketKey: pick.marketKey, selection: `${pick.team} 2+ goals` }, fx.prediction.markets.winner)
-        : null;
+      // Price BOTH teams' "to score 2+" leg, so each side shows its own strength
+      // and its own book price — not just the model's favourite.
+      const priceSide = (marketKey, teamName) => {
+        const p = odds?.best
+          ? bestBookOddsForLeg(odds.best, { marketKey, selection: `${teamName} 2+ goals` }, mk.winner)
+          : null;
+        return { odds: p ? p.odds : null, book: p ? p.book : null };
+      };
+      const homePriced = priceSide("home2Plus", fx.homeTeam.name);
+      const awayPriced = priceSide("away2Plus", fx.awayTeam.name);
+      const pickedPriced = pick.side === "home" ? homePriced : awayPriced;
       rows.push({
         matchId: fx.id, leagueId, home: fx.homeTeam.name, away: fx.awayTeam.name,
         homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo, kickoff: fx.startTimestamp,
-        team: pick.team, prob: pick.prob,
-        bookOdds: priced ? priced.odds : null, bookmaker: priced ? priced.book : null,
+        team: pick.team, side: pick.side, prob: pick.prob,
+        homeProb: Math.round(mk.home2Plus), awayProb: Math.round(mk.away2Plus),
+        homeOdds: homePriced.odds, homeBook: homePriced.book,
+        awayOdds: awayPriced.odds, awayBook: awayPriced.book,
+        // picked side kept as bookOdds/bookmaker for back-compat
+        bookOdds: pickedPriced.odds, bookmaker: pickedPriced.book,
       });
     }
     rows.sort((a, b) => b.prob - a.prob);

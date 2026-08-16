@@ -191,9 +191,9 @@ export default function Team2PlusScanPage() {
                     <span style={styles.teams}>{r.home} v {r.away}</span>
                     <span style={styles.ko}>{koTime(r.kickoff)}</span>
                   </div>
-                  <div style={styles.pickRow}>
-                    <span style={{ ...styles.pickTeam, background: tint(probColor(r.prob)), color: probColor(r.prob) }}>{r.team} 2+ goals · {r.prob}%</span>
-                    <span style={styles.odds}>{r.bookOdds != null ? <>@{r.bookOdds.toFixed(2)} <span style={styles.book}>{r.bookmaker}</span></> : <span style={styles.book}>no price</span>}</span>
+                  <div style={styles.sides}>
+                    <SideRow name={r.home} prob={r.homeProb} odds={r.homeOdds} book={r.homeBook} picked={r.side === "home"} />
+                    <SideRow name={r.away} prob={r.awayProb} odds={r.awayOdds} book={r.awayBook} picked={r.side === "away"} />
                   </div>
                 </div>
               ))}
@@ -201,6 +201,27 @@ export default function Team2PlusScanPage() {
           )
         )}
       </div>
+    </div>
+  );
+}
+
+// One team's "to score 2+" strength: model probability + its own book price.
+// The picked side (the higher probability) is marked and bolded.
+function SideRow({ name, prob, odds, book, picked }) {
+  const hasP = typeof prob === "number";
+  return (
+    <div style={styles.sideRow}>
+      <span style={{ ...styles.sideName, ...(picked ? { fontWeight: 700 } : {}) }}>
+        {picked && <span style={styles.pickDot}>◆</span>}{name}
+      </span>
+      <span style={styles.sideRight}>
+        {hasP && (
+          <span style={{ ...styles.sideProb, background: tint(probColor(prob)), color: probColor(prob) }}>2+ {prob}%</span>
+        )}
+        <span style={styles.sideOdds}>
+          {odds != null ? <>@{odds.toFixed(2)} <span style={styles.book}>{book}</span></> : <span style={styles.book}>no price</span>}
+        </span>
+      </span>
     </div>
   );
 }
@@ -270,4 +291,12 @@ const styles = {
   pickRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderTop: "1px solid var(--border)", paddingTop: 8 },
   odds: { fontSize: 13, fontWeight: 700, color: "var(--text)" },
   book: { fontSize: 11, fontWeight: 400, color: "var(--text3)" },
+
+  sides: { display: "flex", flexDirection: "column", gap: 7, borderTop: "1px solid var(--border)", paddingTop: 8 },
+  sideRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  sideName: { fontSize: 13.5, color: "var(--text)", display: "flex", alignItems: "center", gap: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  pickDot: { color: "var(--accent)", fontSize: 10, flexShrink: 0 },
+  sideRight: { display: "flex", alignItems: "center", gap: 10, flexShrink: 0 },
+  sideProb: { fontSize: 12, fontWeight: 700, borderRadius: 6, padding: "2px 7px", whiteSpace: "nowrap" },
+  sideOdds: { fontSize: 13, fontWeight: 700, color: "var(--text)", minWidth: 76, textAlign: "right" },
 };

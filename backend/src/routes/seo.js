@@ -556,9 +556,13 @@ router.get("/scan/:idslug", async (req, res) => {
 <a class="chip" href="${scanUrl(league)}?date=${shiftYmd(date, 1)}${within === "all" ? "" : `&within=${within}`}">Next ›</a>
 </div>
 <div class="grid" style="margin:0 0 14px">${withinLinks}</div>`;
+    // Both teams' 2+ strength side by side; the stronger side (the pick) is marked.
+    const sideLine = (name, prob, odds, book, picked) =>
+      `<div class="p"${picked ? ' style="color:#e6edf3"' : ""}>${picked ? "◆ " : "&nbsp;&nbsp; "}<b>${esc(name)}</b> to score 2+ · <b>${typeof prob === "number" ? prob + "%" : "–"}</b>${odds ? ` · book <b>@${odds.toFixed(2)}</b>${book ? ` (${esc(book)})` : ""}` : ""}</div>`;
     const evRow = (r) => `<div class="m">
-<div class="t">${esc(r.home)} vs ${esc(r.away)}</div>
-<div class="p">Pick: <b>${esc(r.team)}</b> to score 2+ · <b>${r.prob}%</b>${r.bookOdds ? ` · book <b>@${r.bookOdds.toFixed(2)}</b>${r.bookmaker ? ` (${esc(r.bookmaker)})` : ""}` : ""}${r.kickoff ? ` · ${new Date(r.kickoff * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC` : ""}</div>
+<div class="t">${esc(r.home)} vs ${esc(r.away)}${r.kickoff ? ` · ${new Date(r.kickoff * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC` : ""}</div>
+${sideLine(r.home, r.homeProb, r.homeOdds, r.homeBook, r.side === "home")}
+${sideLine(r.away, r.awayProb, r.awayOdds, r.awayBook, r.side === "away")}
 </div>`;
     main = `<h2 style="font-size:16px;margin:20px 0 6px">Upcoming picks</h2>${dateBar}` +
       (rows.length ? rows.map(evRow).join("") : "<p class='sub'>No upcoming fixtures for this date/window.</p>");
