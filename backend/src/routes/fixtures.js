@@ -37,7 +37,8 @@ import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { oddsCandidates, bestInRange, oddsRangeLadder, filterByMarket } from "../services/oddsGenerator.js";
 import { buildEloModel } from "../services/elo.js";
-import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
+import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES } from "../data/leagues.js";
+import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
 const router = express.Router();
 
