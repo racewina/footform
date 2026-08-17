@@ -1090,13 +1090,6 @@ router.get("/accumulators", async (req, res) => {
   }
 });
 
-// Blend Bets: accumulators (3-5x / 7-10x) that fuse the Safe Bets + VIP market
-// menus and are gated on REAL bookmaker odds >= 1.20 per leg (not the model's
-// fair price). Only fixtures with a published price qualify, so this lazily
-// fetches odds for a confidence-ranked shortlist to bound the upstream fan-out.
-const BLEND_MIN_BOOK = 1.2;
-const BLEND_SHORTLIST = 40;
-
 // Track record for the "safe bets" slips: rebuild the same accumulators from a
 // past day's FINISHED matches (predictions reconstructed from pre-kickoff form)
 // and grade each leg against the real result, so a slip reads as won/lost.
@@ -2153,5 +2146,174 @@ router.get("/team-2plus/scan", async (req, res) => {
   }
 });
 
+
+
+// --- Blend Bets: book-gated accumulators + track record --------------------
+// Blend Bets: accumulators (3-5x / 7-10x) that fuse the Safe Bets + VIP market
+// menus and are gated on REAL bookmaker odds >= 1.20 per leg (not the model's
+// fair price). Only fixtures with a published price qualify, so this lazily
+// fetches odds for a confidence-ranked shortlist to bound the upstream fan-out.
+const BLEND_MIN_BOOK = 1.2;
+const BLEND_SHORTLIST = 40;
+
+// Shared Blend Bets pool builder. Confidence-ranks the day's fixtures, fetches
+// bookmaker odds for a bounded shortlist, and keeps the safest side per fixture
+// whose DISPLAYED odds clear 1.20 — one leg per match. When a fixture carries a
+// grade (the record path, finished matches) each leg is settled won/lost, so the
+// same code drives both the live slate and the track record.
+async function buildBlendPool(leagues, { includeFinished = false } = {}) {
+  const ranked = [];
+  for (const g of leagues) {
+    if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
+    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
+    for (const fx of g.fixtures) {
+      if (!fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+      if (!includeFinished && fx.status === "finished") continue;
+      const cands = blendCandidates(fx);
+      if (!cands.length) continue;
+      ranked.push({ g, fx, cands, top: Math.max(...cands.map((c) => c.prob)) });
+    }
+  }
+  ranked.sort((a, b) => b.top - a.top);
+  const shortlist = ranked.slice(0, BLEND_SHORTLIST);
+
+  const pool = [];
+  for (const { g, fx, cands } of shortlist) {
+    const odds = await getFixtureOdds(fx.id).catch(() => null);
+    if (!odds?.best) continue;
+    let pick = null;
+    for (const c of cands) {
+      const priced = bestBookOddsForLeg(odds.best, { marketKey: c.marketKey, selection: c.selection }, fx.prediction?.markets?.winner);
+      if (!priced || priced.odds < BLEND_MIN_BOOK) continue;
+      const cand = { ...c, bookOdds: priced.odds, bookmaker: priced.book };
+      // A preferred leg (decisive 2+ scorer) beats any non-preferred leg even if
+      // its raw probability is lower; among equals, higher model probability wins.
+      const beatsPick = !pick
+        || (cand.priority || 0) > (pick.priority || 0)
+        || ((cand.priority || 0) === (pick.priority || 0) && cand.prob > pick.prob);
+      if (beatsPick) pick = cand;
+    }
+    if (!pick) continue;
+    const leg = {
+      matchId: fx.id, leagueId: g.league?.id, home: fx.homeTeam.name, away: fx.awayTeam.name,
+      homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo,
+      league: g.league?.name, leagueFlag: g.league?.flag, kickoff: fx.startTimestamp,
+      market: pick.market, marketKey: pick.marketKey, selection: pick.selection,
+      probability: pick.prob, odds: Math.round((100 / pick.prob) * 100) / 100,
+      bookOdds: pick.bookOdds, bookmaker: pick.bookmaker,
+    };
+    // Settle when the source fixture is a graded past result.
+    if (fx.grade?.grades?.[pick.marketKey]) leg.hit = !!fx.grade.grades[pick.marketKey].hit;
+    if (fx.homeScore != null && fx.awayScore != null) { leg.homeScore = fx.homeScore; leg.awayScore = fx.awayScore; }
+    pool.push(leg);
+  }
+  return pool;
+}
+
+// Cheap "which of our leagues have a fixture on this date" pass — one
+// fixtures-by-date call per spanning UTC date (the same source /counts uses),
+// NOT a per-league build. `status` filters to "finished" (record) or
+// "notstarted" (upcoming); omit for any. Lets the blend routes rebuild only the
+// handful of leagues that actually played, instead of all ~70.
+async function leaguesPlayedOn(targetDate, tz, status) {
+  const shiftYmd = (ymd, days) => {
+    const [y, m, d] = ymd.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+  const utcDates = [shiftYmd(targetDate, -1), targetDate, shiftYmd(targetDate, 1)];
+  const lists = await Promise.all(utcDates.map((d) => fetchFixturesByDate(d).catch(() => [])));
+  const ids = new Set();
+  for (const fx of lists.flat()) {
+    const id = String(fx.leagueId);
+    if (!LEAGUES_BY_ID[id] || !fx.startTimestamp) continue;
+    if (formatDate(new Date(fx.startTimestamp * 1000), tz) !== targetDate) continue;
+    if (status && fx.status !== status) continue;
+    ids.add(id);
+  }
+  return [...ids];
+}
+
+
+router.get("/blend-bets", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  // scope=england restricts the pool to the English pyramid (a separate sidebar
+  // view); default scans every league.
+  const scope = req.query.scope === "england" ? "england" : "all";
+  // band=high stacks more of the same book-priced legs to reach bigger combined
+  // odds (10-20 / 20-50); default is the safer 3-5 / 7-10 band. Same pool + model
+  // either way — the accumulator just keeps adding the next-strongest leg.
+  const band = req.query.band === "high" ? "high" : "low";
+  const TIERS = band === "high"
+    ? [{ lo: 10, hi: 20 }, { lo: 20, hi: 50 }]
+    : [{ lo: 3, hi: 5 }, { lo: 7, hi: 10 }];
+
+  const cacheKey = `blend-bets:${scope}:${band}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Only build leagues that actually have an upcoming fixture on the date (or
+    // the whole English pyramid for the england scope).
+    const poolIds = scope === "england"
+      ? LEAGUES.filter((l) => l.country === "England").map((l) => String(l.id))
+      : await leaguesPlayedOn(targetDate, tz, "notstarted");
+    const groups = await Promise.all(
+      poolIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups
+      .filter((g) => g && g.fixtures && g.fixtures.length)
+      .map((g) => ({ league: g.league, fixtures: g.fixtures }));
+
+    const pool = await buildBlendPool(leagues, { includeFinished: false });
+    const slips = TIERS.map((t) => buildBookAccumulator(pool, t.lo, t.hi));
+    const result = { date: targetDate, poolSize: pool.length, slips };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[blend-bets] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Blend Bets track record: rebuild the same book-gated slips from a past day's
+// FINISHED matches (predictions reconstructed pre-kickoff; bookmaker odds still
+// retrievable for recent fixtures) and grade each leg against the real result.
+router.get("/blend-bets/results", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+
+  const cacheKey = `blend-results:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Only rebuild leagues that actually had a FINISHED match on the date.
+    const ids = await leaguesPlayedOn(targetDate, tz, "finished");
+    const groups = await Promise.all(
+      ids.map((id) => buildLeagueResults(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups
+      .filter((g) => g && g.matches && g.matches.length)
+      .map((g) => ({ league: g.league, fixtures: g.matches }));
+
+    const pool = await buildBlendPool(leagues, { includeFinished: true });
+    const slips = [{ lo: 3, hi: 5 }, { lo: 7, hi: 10 }].map((t) => buildBookAccumulator(pool, t.lo, t.hi));
+    const result = { date: targetDate, poolSize: pool.length, slips };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[blend-results] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

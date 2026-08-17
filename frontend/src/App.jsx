@@ -13,6 +13,8 @@ import OddsGeneratorPage from "./pages/OddsGeneratorPage";
 import CornerGeneratorPage from "./pages/CornerGeneratorPage";
 import EventGeneratorPage from "./pages/EventGeneratorPage";
 import Team2PlusScanPage from "./pages/Team2PlusScanPage";
+import BlendBetsPage from "./pages/BlendBetsPage";
+import BlendBetsResultsPage from "./pages/BlendBetsResultsPage";
 import ToolGate from "./components/ToolGate";
 import RoiPage from "./pages/RoiPage";
 import PullToRefresh from "./components/PullToRefresh";
@@ -157,6 +159,10 @@ export default function App() {
               ? <ToolGate title="Event Generator"><EventGeneratorPage date={viewDate} /></ToolGate>
             : selectedLeague === "team2plus-scan"
               ? <ToolGate title="2+ Goals Scan"><Team2PlusScanPage /></ToolGate>
+            : selectedLeague === "blend-bets"
+              ? <ToolGate title="Blend Bets"><BlendBetsPage onOpenFixture={openFixture} /></ToolGate>
+            : selectedLeague === "blend-results"
+              ? <ToolGate title="Blend Bets Record"><BlendBetsResultsPage /></ToolGate>
             : selectedLeague === "roi"
               ? <RoiPage />
             : selectedLeague === "value"
@@ -190,6 +196,8 @@ const LEAGUE_NAMES = {
   "corner-gen": { name: "Corner Generator", flag: "⛳" },
   "event-gen": { name: "Event Generator", flag: "⚡" },
   "team2plus-scan": { name: "2+ Goals Scan", flag: "📊" },
+  "blend-bets": { name: "Blend Bets", flag: "🔀" },
+  "blend-results": { name: "Blend Bets Record", flag: "🔀" },
   "value": { name: "Value Bets", flag: "📈" },
   "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

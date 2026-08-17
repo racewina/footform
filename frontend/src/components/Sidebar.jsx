@@ -293,6 +293,34 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           <button
             style={{
               ...styles.todayItem,
+              ...(String(selectedId) === "blend-bets" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("blend-bets");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🔀</span>
+            <span style={styles.itemName}>Blend Bets</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "blend-results" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("blend-results");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🔀</span>
+            <span style={styles.itemName}>Blend Bets Record</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
               ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
