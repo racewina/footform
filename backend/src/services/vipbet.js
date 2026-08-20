@@ -68,7 +68,7 @@ export const SA_FLOOR = { win: 47, score1: 60, twoPlus: 54, over25: 56, btts: 59
 // Every configured South American competition, derived from the league table by
 // country so it tracks additions automatically. Covers the domestic pyramids
 // (Brazil, Argentina, Ecuador, Bolivia, Uruguay) plus the two CONMEBOL cups.
-const SA_COUNTRIES = new Set(["Brazil", "Argentina", "Ecuador", "Bolivia", "Uruguay", "South America"]);
+const SA_COUNTRIES = new Set(["Brazil", "Argentina", "Ecuador", "Bolivia", "Uruguay", "Colombia", "South America"]);
 export const SOUTH_AMERICAN_LEAGUES = new Set(
   LEAGUES.filter((l) => SA_COUNTRIES.has(l.country)).map((l) => l.id)
 );

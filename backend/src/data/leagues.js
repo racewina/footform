@@ -65,6 +65,7 @@ export const LEAGUES = [
   { id: "242", name: "LigaPro Serie A", country: "Ecuador", tier: 1, flag: "🇪🇨" },
   { id: "344", name: "Primera División", country: "Bolivia", tier: 1, flag: "🇧🇴" },
   { id: "268", name: "Primera División", country: "Uruguay", tier: 1, flag: "🇺🇾" },
+  { id: "239", name: "Primera A", country: "Colombia", tier: 1, flag: "🇨🇴" },
   { id: "253", name: "Major League Soccer", country: "USA", tier: 1, flag: "🇺🇸" },
   { id: "255", name: "USL Championship", country: "USA", tier: 2, flag: "🇺🇸" },
   { id: "479", name: "Premier League", country: "Canada", tier: 1, flag: "🇨🇦" },

@@ -192,6 +192,7 @@ const LEAGUE_NAMES = {
   "242": { name: "LigaPro Serie A", flag: "🇪🇨" },
   "344": { name: "Primera División", flag: "🇧🇴" },
   "268": { name: "Primera División", flag: "🇺🇾" },
+  "239": { name: "Primera A", flag: "🇨🇴" },
   "253": { name: "Major League Soccer", flag: "🇺🇸" },
   "255": { name: "USL Championship", flag: "🇺🇸" },
   "479": { name: "Premier League", flag: "🇨🇦" },
