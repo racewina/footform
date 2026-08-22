@@ -608,7 +608,7 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
     <div ref={rootRef} style={{ ...styles.card, ...(ring ? styles.cardFocused : {}) }}>
       {showLeague && league && (
         <div style={styles.cardLeague}>
-          <span style={{ fontSize: 13 }}>{league.flag}</span>
+          {league.country && <span style={styles.cardLeagueCountry}>{league.country}</span>}
           <span style={styles.cardLeagueName}>{league.name}</span>
         </div>
       )}
@@ -1194,6 +1194,7 @@ const styles = {
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", flexShrink: 0 },
   cardFocused: { border: "1px solid var(--accent)", boxShadow: "0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)", transition: "box-shadow 0.3s ease" },
   cardLeague: { display: "flex", alignItems: "center", gap: 6, padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg3)" },
+  cardLeagueCountry: { fontSize: 11, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase", letterSpacing: 0.4, flexShrink: 0 },
   cardLeagueName: { fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   cardHead: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", width: "100%", textAlign: "left" },
   aTeam: { flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 0 },
