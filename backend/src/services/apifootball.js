@@ -145,6 +145,11 @@ function adaptFixture(fx) {
     awayTeam: { id: away.id, name: away.name, shortName: away.name, logo: away.logo || null },
     homeScore: { current: fx.goals?.home ?? null },
     awayScore: { current: fx.goals?.away ?? null },
+    leagueId: fx.league?.id ?? null,
+    leagueName: fx.league?.name || null,
+    // Pre-season/international friendlies carry unreliable scorelines (weakened,
+    // experimental sides), so form is built competitive-only (see fetchTeamLastMatches).
+    friendly: /friendl/i.test(fx.league?.name || ""),
     roundInfo: { round: fx.league?.round || null },
     venue: { name: fx.fixture?.venue?.name || null },
   };
@@ -197,8 +202,15 @@ export async function fetchPastEvents(leagueId, season, page = 0) {
 // games, which parseFormFromEvents then orders and trims.
 export async function fetchTeamLastMatches(teamId, page = 0) {
   if (page > 0) return { events: [] };
-  const json = await request(`/fixtures?team=${teamId}&last=12`);
-  return adaptFixtures(json);
+  // 20 (not 12) so that after friendlies are filtered out, enough competitive
+  // games remain — especially in pre-season when the most recent fixtures are
+  // mostly friendlies.
+  const json = await request(`/fixtures?team=${teamId}&last=20`);
+  // Exclude friendlies at the source so EVERY form/prediction consumer (form,
+  // backtest events, analyzeMatchup/predict) gets competitive-only games. Friendly
+  // scorelines are noise (weak/experimental sides) and were inflating form.
+  const { events } = adaptFixtures(json);
+  return { events: (events || []).filter((e) => !e.friendly) };
 }
 
 // Fold a string to its accent-stripped, lower-cased form for comparison
