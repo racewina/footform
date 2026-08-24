@@ -115,3 +115,22 @@ export const LEAGUES_BY_ID = Object.fromEntries(
 // pick); this only bars them from the auto-selected slips. By country so every
 // division is covered.
 export const NO_BET_COUNTRIES = new Set(["Iceland", "Finland", "Estonia"]);
+
+// Country → continent, for the scan/corner league filters' continent grouping.
+// The pseudo-countries (Europe, South America, International) map to themselves.
+export const COUNTRY_CONTINENT = {
+  England: "Europe", Scotland: "Europe", Spain: "Europe", Italy: "Europe", Germany: "Europe",
+  France: "Europe", Netherlands: "Europe", Portugal: "Europe", Turkey: "Europe", Belgium: "Europe",
+  Austria: "Europe", Norway: "Europe", Sweden: "Europe", Denmark: "Europe", Estonia: "Europe",
+  Finland: "Europe", Iceland: "Europe", Switzerland: "Europe", Poland: "Europe",
+  "Czech Republic": "Europe", Hungary: "Europe", Romania: "Europe", Serbia: "Europe",
+  Slovakia: "Europe", Croatia: "Europe", Bulgaria: "Europe", Greece: "Europe", Europe: "Europe",
+  Brazil: "South America", Argentina: "South America", Ecuador: "South America", Bolivia: "South America",
+  Uruguay: "South America", Chile: "South America", Colombia: "South America", Venezuela: "South America",
+  "South America": "South America",
+  USA: "North America", Canada: "North America", Mexico: "North America", "Costa Rica": "North America",
+  China: "Asia", "South Korea": "Asia", Japan: "Asia",
+  "South Africa": "Africa",
+  International: "International",
+};
+export const continentFor = (country) => COUNTRY_CONTINENT[country] || "Other";

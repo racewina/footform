@@ -153,6 +153,9 @@ const STATUS_SEGMENTS = [
   { key: "finished", label: "Finished" },
 ];
 
+// Continent chips for the Today view (shown only when >1 is present that day).
+const CONTINENT_ORDER = ["Europe", "South America", "North America", "Asia", "Africa", "International", "Other"];
+
 // Gentle pulse for the live dot (state indication, not decoration for its own
 // sake); disabled under reduced-motion.
 const pulseCSS = `
@@ -184,6 +187,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   // Multi-select: an array of league ids. Empty = all leagues.
   const [leagueFilter, setLeagueFilter] = useState([]);
   const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
+  const [continentFilter, setContinentFilter] = useState("all"); // Today view only
   // The model disclaimer is always available but collapses behind an ⓘ on phones,
   // where the 3-line block otherwise pushed the first match card below the fold.
   // Default open on wide screens, closed on narrow ones.
@@ -216,7 +220,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
 
   // Moving to a new day repopulates which leagues are playing, so drop the
   // league filter to avoid a stale selection that hides everything.
-  const goToDate = (next) => { setLeagueFilter([]); setDate(next); };
+  const goToDate = (next) => { setLeagueFilter([]); setContinentFilter("all"); setDate(next); };
   const shift = (days) =>
     goToDate((() => {
       const next = new Date(date);
@@ -277,11 +281,19 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
     return !fx.startTimestamp || fx.startTimestamp * 1000 <= withinCutoff;
   };
 
+  // Continent filter (Today view): narrows to one continent, on top of the
+  // status/league/within filters. Continents present today drive the chip row.
+  const continentsInView = isTodayView
+    ? CONTINENT_ORDER.filter((c) => groups.some((g) => (g.league.continent || "Other") === c))
+    : [];
+  const matchesContinent = (league) => continentFilter === "all" || (league.continent || "Other") === continentFilter;
+
   // Fixtures the status filter applies to (post prediction + league + time filter),
   // for both the counts on the segmented control and the actual filtering.
   const statusBase = groups
     .flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
-    .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id))) && passWithin(x.fx));
+    .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id)))
+      && (!isTodayView || matchesContinent(x.league)) && passWithin(x.fx));
 
   const statusCounts = {
     all: statusBase.length,
@@ -315,7 +327,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   // label (country-prefixed) rather than left in fixture-group order.
   const dayLeagues = isTodayView
     ? groups
-        .filter((g) => g.fixtures.some(inCurrentView) || leagueFilter.includes(String(g.league.id)))
+        .filter((g) => (g.fixtures.some(inCurrentView) && matchesContinent(g.league)) || leagueFilter.includes(String(g.league.id)))
         .map((g) => ({
           id: String(g.league.id),
           name: g.league.name,
@@ -478,6 +490,26 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {!showLoading && !isError && totalFixtures > 0 && isTodayView && continentsInView.length > 1 && (
+        <div className="ff-continentbar" style={styles.continentBar}>
+          <button
+            style={{ ...styles.contChip, ...(continentFilter === "all" ? styles.contChipActive : {}) }}
+            onClick={() => { setContinentFilter("all"); setLeagueFilter([]); }}
+          >
+            All
+          </button>
+          {continentsInView.map((c) => (
+            <button
+              key={c}
+              style={{ ...styles.contChip, ...(continentFilter === c ? styles.contChipActive : {}) }}
+              onClick={() => { setContinentFilter(c); setLeagueFilter([]); }}
+            >
+              {c}
+            </button>
+          ))}
         </div>
       )}
 
@@ -1171,6 +1203,9 @@ const styles = {
   segBtnDisabled: { opacity: 0.35, cursor: "default" },
   segCount: { fontSize: 11, fontWeight: 700, opacity: 0.6 },
   segDot: { width: 7, height: 7, borderRadius: "50%", background: "var(--loss)", flexShrink: 0 },
+  continentBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
+  contChip: { fontSize: 13, fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px", cursor: "pointer" },
+  contChipActive: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)" },
   filterBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
   filterLabel: { fontSize: 12, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 2 },
   filterChip: { fontSize: 13, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px" },

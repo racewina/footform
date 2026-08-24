@@ -15,6 +15,11 @@ const WINDOWS = [
   { key: "6", label: "Next 6h" },
 ];
 
+// Same pinned order as the Today's Matches sidebar.
+const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America"];
+// Continent chips (shown only when present in the day's leagues).
+const CONTINENT_ORDER = ["Europe", "South America", "North America", "Asia", "Africa", "International", "Other"];
+
 // Leagues that have upcoming fixtures for the date + window (drives the picker).
 async function fetchScanLeagues({ dateStr, within }) {
   const res = await fetch(`/api/team-2plus/leagues?date=${dateStr}&within=${within}&tz=${encodeURIComponent(TZ)}`, {
@@ -25,9 +30,9 @@ async function fetchScanLeagues({ dateStr, within }) {
   return res.json();
 }
 
-async function fetchScan({ leagues, mode, dateStr, within }) {
+async function fetchScan({ leagues, mode, dateStr, within, goals }) {
   const extra = mode === "upcoming" ? `&date=${dateStr}&within=${within}` : "";
-  const res = await fetch(`/api/team-2plus/scan?leagues=${leagues}&mode=${mode}${extra}&tz=${encodeURIComponent(TZ)}`, {
+  const res = await fetch(`/api/team-2plus/scan?leagues=${leagues}&mode=${mode}&goals=${goals}${extra}&tz=${encodeURIComponent(TZ)}`, {
     headers: { "x-odds-pass": getToolPass() },
   });
   if (res.status === 401) { clearToolPass(); throw new Error("This tool is private."); }
@@ -62,7 +67,10 @@ export default function Team2PlusScanPage() {
   const [viewDate, setViewDate] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
   const [selected, setSelected] = useState(() => new Set());   // league ids (strings)
   const [collapsed, setCollapsed] = useState(() => new Set());  // collapsed country groups
-  const [generated, setGenerated] = useState(null); // { leagues, mode, dateStr, within, key }
+  const [pickerOpen, setPickerOpen] = useState(true);           // whole league panel open?
+  const [continent, setContinent] = useState("all");            // continent filter
+  const [goals, setGoals] = useState(2);                        // 1 = to score, 2 = 2+ goals
+  const [generated, setGenerated] = useState(null); // { leagues, mode, dateStr, within, goals, key }
 
   const dateStr = ymd(viewDate);
   const isToday = dateStr === ymd(new Date());
@@ -88,12 +96,28 @@ export default function Team2PlusScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availKey]);
 
-  const groups = useMemo(() => {
-    const by = {};
-    for (const l of avail) (by[l.country] ||= []).push(l);
-    return Object.entries(by).sort(([a], [b]) => a.localeCompare(b));
+  // Continents present in the day's leagues, in preferred order (drives the chips).
+  const continents = useMemo(() => {
+    const present = new Set(avail.map((l) => l.continent || "Other"));
+    return CONTINENT_ORDER.filter((c) => present.has(c));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availKey]);
+
+  // Same country order as Today's Matches: pinned top countries first (only those
+  // that have fixtures, since the list is fixture-narrowed), then the rest A–Z.
+  // Narrowed to the chosen continent when one is picked.
+  const groups = useMemo(() => {
+    const src = continent === "all" ? avail : avail.filter((l) => (l.continent || "Other") === continent);
+    const by = {};
+    for (const l of src) (by[l.country] ||= []).push(l);
+    const pinned = TOP_COUNTRIES.filter((c) => by[c]).map((c) => [c, by[c]]);
+    const rest = Object.entries(by)
+      .filter(([c]) => !TOP_COUNTRIES.includes(c))
+      .sort(([a], [b]) => a.localeCompare(b));
+    return [...pinned, ...rest];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availKey, continent]);
+  const shownCount = groups.reduce((n, [, items]) => n + items.length, 0);
 
   const toggleLeague = (id) => setSelected((p) => {
     const n = new Set(p); const k = String(id); n.has(k) ? n.delete(k) : n.add(k); return n;
@@ -104,7 +128,12 @@ export default function Team2PlusScanPage() {
   const setCountry = (items, on) => setSelected((p) => {
     const n = new Set(p); items.forEach((l) => on ? n.add(String(l.id)) : n.delete(String(l.id))); return n;
   });
-  const selectAll = () => setSelected(new Set(avail.map((l) => String(l.id))));
+  // Add every league currently shown (respects the continent filter; accumulates).
+  const selectAll = () => setSelected((p) => {
+    const n = new Set(p);
+    groups.forEach(([, items]) => items.forEach((l) => n.add(String(l.id))));
+    return n;
+  });
   const clearAll = () => setSelected(new Set());
 
   const selCount = selected.size;
@@ -113,8 +142,8 @@ export default function Team2PlusScanPage() {
     if (!selCount) return;
     const ids = [...selected].join(",");
     setGenerated({
-      leagues: ids, mode, dateStr, within: effWithin,
-      key: `${ids}:${mode}:${mode === "upcoming" ? `${dateStr}:${effWithin}` : "bt"}`,
+      leagues: ids, mode, dateStr, within: effWithin, goals,
+      key: `${ids}:${mode}:g${goals}:${mode === "upcoming" ? `${dateStr}:${effWithin}` : "bt"}`,
     });
   };
 
@@ -131,6 +160,7 @@ export default function Team2PlusScanPage() {
   });
   const data = scan.data;
   const rows = data?.rows || [];
+  const gLabel = data?.goals === 1 ? "1+" : "2+"; // label for the generated result
   const multi = (data?.leagues?.length || 0) > 1;
   const scopeLabel = data
     ? (data.leagues?.length === 1 ? `${data.leagues[0].flag} ${data.leagues[0].name}` : `${data.leagues?.length} leagues`)
@@ -147,14 +177,29 @@ export default function Team2PlusScanPage() {
       <div style={styles.note}>
         <span aria-hidden="true">⚽</span>
         <span>
-          Tick one or more leagues, then <strong>Generate</strong> for each upcoming fixture's
-          "team to score 2+ goals" pick with real bookmaker prices, or <strong>Backtest</strong> to
-          see how the pick has landed across past finished matches. The list only shows leagues with
-          fixtures for the chosen date and <strong>Within</strong> window. Estimates only.
+          Pick a <strong>Goals</strong> range (1+ or 2+), tick one or more leagues, then
+          <strong> Generate</strong> for each fixture's best "team to score" pick with real bookmaker
+          prices, or <strong>Backtest</strong> to see how the pick has landed across past finished
+          matches. The list only shows leagues with fixtures for the chosen date and
+          <strong> Within</strong> window. Estimates only.
         </span>
       </div>
 
       <div style={styles.controls}>
+        <label style={styles.fieldNarrow}>
+          <span style={styles.fieldLabel}>Goals</span>
+          <div style={styles.seg}>
+            {[{ v: 1, l: "1+ Goals" }, { v: 2, l: "2+ Goals" }].map((o) => (
+              <button
+                key={o.v}
+                style={{ ...styles.segBtn, ...(goals === o.v ? styles.segOn : {}) }}
+                onClick={() => { setGoals(o.v); setGenerated(null); }}
+              >
+                {o.l}
+              </button>
+            ))}
+          </div>
+        </label>
         <label style={styles.fieldNarrow}>
           <span style={styles.fieldLabel}>Within</span>
           <select
@@ -176,17 +221,35 @@ export default function Team2PlusScanPage() {
         </button>
       </div>
 
+      {continents.length > 1 && (
+        <div style={styles.continentBar}>
+          <button
+            style={{ ...styles.contChip, ...(continent === "all" ? styles.contChipOn : {}) }}
+            onClick={() => setContinent("all")}
+          >All</button>
+          {continents.map((c) => (
+            <button
+              key={c}
+              style={{ ...styles.contChip, ...(continent === c ? styles.contChipOn : {}) }}
+              onClick={() => setContinent(c)}
+            >{c}</button>
+          ))}
+        </div>
+      )}
+
       <div style={styles.pickerHead}>
-        <span style={styles.pickerTitle}>
-          Leagues{avail.length ? ` · ${avail.length}` : ""}
+        <button style={styles.pickerToggle} onClick={() => setPickerOpen((v) => !v)} aria-expanded={pickerOpen}>
+          <span style={{ ...styles.chev, transform: pickerOpen ? "rotate(90deg)" : "none" }}>›</span>
+          Leagues{shownCount ? ` · ${shownCount}` : ""}
           {selCount ? <span style={styles.selBadge}>{selCount} selected</span> : null}
-        </span>
+        </button>
         <span>
           <button style={styles.linkBtn} onClick={selectAll} disabled={!avail.length}>Select all</button>
           <button style={styles.linkBtn} onClick={clearAll} disabled={!selCount}>Clear</button>
         </span>
       </div>
 
+      {pickerOpen && (
       <div style={styles.pickerWrap}>
         {lgQuery.isLoading ? (
           <p style={styles.pickerNote}>Loading leagues…</p>
@@ -236,6 +299,7 @@ export default function Team2PlusScanPage() {
           })
         )}
       </div>
+      )}
 
       <div style={styles.board}>
         {!generated && <p style={styles.empty}>Tick leagues above, then Backtest or Generate.</p>}
@@ -259,7 +323,7 @@ export default function Team2PlusScanPage() {
                   <Stat label="Picks landed" value={`${data.summary.hits}/${data.summary.total}`} />
                   <Stat label="Avg model prob" value={`${data.summary.avgProb}%`} />
                 </div>
-                <div style={styles.summNote}>How often the model's picked team actually scored 2+ goals.</div>
+                <div style={styles.summNote}>How often the model's picked team actually scored {gLabel} goals.</div>
               </div>
             ) : (
               <p style={styles.empty}>No finished matches with a prediction for the selected leagues in the window.</p>
@@ -267,12 +331,12 @@ export default function Team2PlusScanPage() {
             {rows.map((r) => (
               <div key={`${r.leagueId}-${r.matchId}`} style={styles.row}>
                 <span style={styles.rowDate}>{prettyDay(r.date)}</span>
-                {multi && <span style={styles.rowFlag} title={r.leagueName}>{r.leagueFlag}</span>}
+                {multi && <span style={styles.rowLeague} title={r.leagueName}>{r.leagueFlag} {r.leagueName}</span>}
                 <span style={styles.rowMatch}>
                   {r.home} <b style={styles.score}>{r.homeScore}-{r.awayScore}</b> {r.away}
                 </span>
                 <span style={styles.rowPick}>
-                  <span style={{ ...styles.pickTeam, background: tint(probColor(r.prob)), color: probColor(r.prob) }}>{r.team} 2+ · {r.prob}%</span>
+                  <span style={{ ...styles.pickTeam, background: tint(probColor(r.prob)), color: probColor(r.prob) }}>{r.team} {gLabel} · {r.prob}%</span>
                 </span>
                 <span style={{ ...styles.hitBadge, ...(r.hit ? styles.hitWon : styles.hitLost) }}>{r.hit ? "✓" : "✗"}</span>
               </div>
@@ -285,22 +349,25 @@ export default function Team2PlusScanPage() {
             <p style={styles.empty}>No upcoming fixtures for the selected leagues in this window.</p>
           ) : (
             <>
-              <div style={styles.resultHead}>{scopeLabel} · {rows.length} upcoming — likeliest to score 2+</div>
-              {rows.map((r) => (
-                <div key={`${r.leagueId}-${r.matchId}`} style={styles.card}>
+              <div style={styles.resultHead}>{scopeLabel} · {rows.length} fixtures — likeliest to score {gLabel}</div>
+              {rows.map((r) => {
+                const live = r.status && r.status !== "notstarted";
+                return (
+                <div key={`${r.leagueId}-${r.matchId}`} style={{ ...styles.card, ...(live ? styles.cardLive : {}) }}>
+                  {multi && <div style={styles.leagueCap}>{r.leagueFlag} {r.leagueName}</div>}
                   <div style={styles.cardHead}>
-                    <span style={styles.teams}>
-                      {multi && <span style={styles.cardFlag} title={r.leagueName}>{r.leagueFlag}</span>}
-                      {r.home} v {r.away}
-                    </span>
-                    <span style={styles.ko}>{koTime(r.kickoff)}</span>
+                    <span style={styles.teams}>{r.home} v {r.away}</span>
+                    {live
+                      ? <span style={styles.liveTag}>● LIVE</span>
+                      : <span style={styles.ko}>{koTime(r.kickoff)}</span>}
                   </div>
                   <div style={styles.sides}>
-                    <SideRow name={r.home} prob={r.homeProb} odds={r.homeOdds} book={r.homeBook} picked={r.side === "home"} />
-                    <SideRow name={r.away} prob={r.awayProb} odds={r.awayOdds} book={r.awayBook} picked={r.side === "away"} />
+                    <SideRow name={r.home} prob={r.homeProb} odds={r.homeOdds} book={r.homeBook} picked={r.side === "home"} label={gLabel} />
+                    <SideRow name={r.away} prob={r.awayProb} odds={r.awayOdds} book={r.awayBook} picked={r.side === "away"} label={gLabel} />
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </>
           )
         )}
@@ -309,9 +376,9 @@ export default function Team2PlusScanPage() {
   );
 }
 
-// One team's "to score 2+" strength: model probability + its own book price.
+// One team's "to score N+" strength: model probability + its own book price.
 // The picked side (the higher probability) is marked and bolded.
-function SideRow({ name, prob, odds, book, picked }) {
+function SideRow({ name, prob, odds, book, picked, label = "2+" }) {
   const hasP = typeof prob === "number";
   return (
     <div style={styles.sideRow}>
@@ -320,7 +387,7 @@ function SideRow({ name, prob, odds, book, picked }) {
       </span>
       <span style={styles.sideRight}>
         {hasP && (
-          <span style={{ ...styles.sideProb, background: tint(probColor(prob)), color: probColor(prob) }}>2+ {prob}%</span>
+          <span style={{ ...styles.sideProb, background: tint(probColor(prob)), color: probColor(prob) }}>{label} {prob}%</span>
         )}
         <span style={styles.sideOdds}>
           {odds != null ? <>@{odds.toFixed(2)} <span style={styles.book}>{book}</span></> : <span style={styles.book}>no price</span>}
@@ -355,6 +422,9 @@ const styles = {
   select: { background: "var(--bg2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", fontSize: 14, width: "100%" },
   fieldNarrow: { display: "flex", flexDirection: "column", gap: 4, minWidth: 130 },
   selectOff: { opacity: 0.45, cursor: "not-allowed" },
+  seg: { display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" },
+  segBtn: { flex: 1, background: "var(--bg2)", color: "var(--text2)", border: "none", padding: "8px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+  segOn: { background: "var(--accent)", color: "#04121f", fontWeight: 800 },
   spacer: { flex: 1 },
   dateBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "12px 24px", borderBottom: "1px solid var(--border)" },
   navBtn: { fontSize: 22, color: "var(--text2)", padding: "2px 14px", borderRadius: 8, background: "var(--bg2)", cursor: "pointer" },
@@ -364,20 +434,24 @@ const styles = {
   btnAlt: { background: "#3a86ff", color: "#fff" },
   btnOff: { opacity: 0.4, cursor: "not-allowed" },
 
+  continentBar: { display: "flex", flexWrap: "wrap", gap: 6, padding: "0 24px 8px", maxWidth: 860, width: "100%", margin: "0 auto" },
+  contChip: { fontSize: 12, fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 20, padding: "4px 11px", cursor: "pointer" },
+  contChipOn: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)" },
   pickerHead: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px 6px", maxWidth: 860, width: "100%", margin: "0 auto" },
   pickerTitle: { fontSize: 12, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase", letterSpacing: 0.4, display: "flex", alignItems: "center", gap: 8 },
+  pickerToggle: { fontSize: 12, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase", letterSpacing: 0.4, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 },
   selBadge: { fontSize: 11, fontWeight: 700, color: "var(--accent)", background: "rgba(46,204,113,0.14)", borderRadius: 20, padding: "2px 9px", textTransform: "none", letterSpacing: 0 },
   linkBtn: { fontSize: 12, fontWeight: 600, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: "2px 6px" },
-  pickerWrap: { maxHeight: 230, overflowY: "auto", padding: "0 24px 8px", maxWidth: 860, width: "100%", margin: "0 auto", borderBottom: "1px solid var(--border)" },
-  pickerNote: { color: "var(--text3)", fontSize: 13, textAlign: "center", padding: 24 },
+  pickerWrap: { maxHeight: 190, overflowY: "auto", padding: "0 24px 4px", maxWidth: 860, width: "100%", margin: "0 auto", borderBottom: "1px solid var(--border)" },
+  pickerNote: { color: "var(--text3)", fontSize: 13, textAlign: "center", padding: 16 },
   cGroup: { borderBottom: "1px solid var(--border)" },
   cRow: { display: "flex", alignItems: "center", gap: 8 },
-  cToggle: { flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "8px 0", color: "var(--text)", fontSize: 14, fontWeight: 600 },
+  cToggle: { flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "4px 0", color: "var(--text)", fontSize: 13.5, fontWeight: 600 },
   cName: { display: "flex", alignItems: "center", gap: 6 },
   cMeta: { display: "flex", alignItems: "center", gap: 8, color: "var(--text3)" },
-  cCount: { fontSize: 12, fontWeight: 700, background: "var(--bg2)", borderRadius: 20, padding: "1px 8px", minWidth: 20, textAlign: "center" },
-  chev: { fontSize: 16, display: "inline-block", transition: "transform .15s" },
-  lRow: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0 6px 26px", cursor: "pointer", fontSize: 13.5, color: "var(--text2)" },
+  cCount: { fontSize: 11, fontWeight: 700, background: "var(--bg2)", borderRadius: 20, padding: "1px 7px", minWidth: 18, textAlign: "center" },
+  chev: { fontSize: 14, display: "inline-block", transition: "transform .15s" },
+  lRow: { display: "flex", alignItems: "center", gap: 8, padding: "3px 0 3px 24px", cursor: "pointer", fontSize: 13, color: "var(--text2)" },
   lRowOn: { color: "var(--text)" },
   lName: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   lCount: { fontSize: 11, color: "var(--text3)", fontWeight: 700 },
@@ -409,6 +483,10 @@ const styles = {
   hitLost: { background: "rgba(231,76,60,0.16)", color: "#e74c3c" },
 
   card: { background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 },
+  cardLive: { opacity: 0.72 },
+  leagueCap: { fontSize: 11.5, fontWeight: 600, color: "var(--text3)", display: "flex", alignItems: "center", gap: 5, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  rowLeague: { fontSize: 11, color: "var(--text3)", maxWidth: 128, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 },
+  liveTag: { fontSize: 11, fontWeight: 800, color: "#e74c3c", flexShrink: 0, letterSpacing: 0.3 },
   cardHead: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
   teams: { fontSize: 14, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 },
   cardFlag: { fontSize: 14, flexShrink: 0 },
