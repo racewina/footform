@@ -7,6 +7,7 @@ export const LEAGUES = [
   { id: "40", name: "Championship", country: "England", tier: 2, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "41", name: "League One", country: "England", tier: 3, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "42", name: "League Two", country: "England", tier: 4, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  { id: "48", name: "EFL Cup", country: "England", tier: 1, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "179", name: "Scottish Premiership", country: "Scotland", tier: 1, flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   { id: "180", name: "Scottish Championship", country: "Scotland", tier: 2, flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   { id: "140", name: "La Liga", country: "Spain", tier: 1, flag: "🇪🇸" },

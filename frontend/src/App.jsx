@@ -204,6 +204,7 @@ const LEAGUE_NAMES = {
   "40": { name: "Championship", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "41": { name: "League One", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "42": { name: "League Two", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  "48": { name: "EFL Cup", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "179": { name: "Scottish Premiership", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   "180": { name: "Scottish Championship", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   "140": { name: "La Liga", flag: "🇪🇸" },
