@@ -95,6 +95,7 @@ export const LEAGUES = [
   { id: "293", name: "K League 2", country: "South Korea", tier: 2, flag: "🇰🇷" },
   { id: "98", name: "J1 League", country: "Japan", tier: 1, flag: "🇯🇵" },
   { id: "99", name: "J2 League", country: "Japan", tier: 2, flag: "🇯🇵" },
+  { id: "102", name: "Emperor Cup", country: "Japan", tier: 1, flag: "🇯🇵" },
   { id: "288", name: "Premier Soccer League", country: "South Africa", tier: 1, flag: "🇿🇦" },
   { id: "2", name: "Champions League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "3", name: "Europa League", country: "Europe", tier: 1, flag: "🇪🇺" },
