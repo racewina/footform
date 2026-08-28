@@ -252,6 +252,7 @@ const LEAGUE_NAMES = {
   "210": { name: "HNL", flag: "🇭🇷" },
   "172": { name: "Parva Liga", flag: "🇧🇬" },
   "197": { name: "Super League 1", flag: "🇬🇷" },
+  "318": { name: "First Division", flag: "🇨🇾" },
   "71": { name: "Brasileirão Série A", flag: "🇧🇷" },
   "72": { name: "Brasileirão Série B", flag: "🇧🇷" },
   "75": { name: "Brasileirão Série C", flag: "🇧🇷" },
