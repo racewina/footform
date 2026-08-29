@@ -145,6 +145,12 @@ const WINDOWS = [
   { key: "12", label: "Next 12h" },
 ];
 
+// Label a kickoff-hour bucket, e.g. 6 → "6–7 AM".
+const hourLabel = (h) => {
+  const f = (x) => `${x % 12 === 0 ? 12 : x % 12} ${x < 12 ? "AM" : "PM"}`;
+  return `${f(h)}–${f((h + 1) % 24)}`;
+};
+
 // Status segments for the "Live / Upcoming / Finished" filter on busy days.
 const STATUS_SEGMENTS = [
   { key: "all", label: "All" },
@@ -184,6 +190,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   const [filterMarket, setFilterMarket] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all"); // all | live | upcoming | finished
   const [withinFilter, setWithinFilter] = useState("all"); // all | 3 | 6 | 12 (hours, today only)
+  const [hourFilter, setHourFilter] = useState("all");     // "all" | 0..23 — kickoff-hour bucket
   // Multi-select: an array of league ids. Empty = all leagues.
   const [leagueFilter, setLeagueFilter] = useState([]);
   const [leagueMenuOpen, setLeagueMenuOpen] = useState(false);
@@ -220,7 +227,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
 
   // Moving to a new day repopulates which leagues are playing, so drop the
   // league filter to avoid a stale selection that hides everything.
-  const goToDate = (next) => { setLeagueFilter([]); setContinentFilter("all"); setDate(next); };
+  const goToDate = (next) => { setLeagueFilter([]); setContinentFilter("all"); setHourFilter("all"); setDate(next); };
   const shift = (days) =>
     goToDate((() => {
       const next = new Date(date);
@@ -288,12 +295,20 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
     : [];
   const matchesContinent = (league) => continentFilter === "all" || (league.continent || "Other") === continentFilter;
 
+  // Kick-off hour buckets (Today view, any date): the distinct local kickoff
+  // hours present that day, so you can zoom to "matches starting 6–7 AM" etc.
+  const kickoffHour = (fx) => (fx.startTimestamp ? new Date(fx.startTimestamp * 1000).getHours() : null);
+  const hourBuckets = isTodayView
+    ? [...new Set(groups.flatMap((g) => g.fixtures.map(kickoffHour)).filter((h) => h != null))].sort((a, b) => a - b)
+    : [];
+  const passHour = (fx) => !isTodayView || hourFilter === "all" || kickoffHour(fx) === Number(hourFilter);
+
   // Fixtures the status filter applies to (post prediction + league + time filter),
   // for both the counts on the segmented control and the actual filtering.
   const statusBase = groups
     .flatMap((g) => g.fixtures.map((fx) => ({ fx, league: g.league, season: g.season })))
     .filter((x) => (!isTodayView || !leagueFilter.length || leagueFilter.includes(String(x.league.id)))
-      && (!isTodayView || matchesContinent(x.league)) && passWithin(x.fx));
+      && (!isTodayView || matchesContinent(x.league)) && passWithin(x.fx) && passHour(x.fx));
 
   const statusCounts = {
     all: statusBase.length,
@@ -313,7 +328,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   //
   // Already-selected leagues stay listed even when they no longer qualify:
   // hiding a checked box would leave a filter active with no way to switch it off.
-  const inCurrentView = (fx) => passWithin(fx) && (effStatus === "all" || statusOf(fx) === effStatus);
+  const inCurrentView = (fx) => passWithin(fx) && passHour(fx) && (effStatus === "all" || statusOf(fx) === effStatus);
 
   // "Serbia Super Liga" — the flag alone isn't enough to tell leagues apart, so
   // prefix the country. Skipped when the league name already carries it
@@ -451,6 +466,15 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
             })}
           </div>
           <div style={styles.rightCluster}>
+            {isTodayView && hourBuckets.length > 1 && (
+              <label style={styles.withinField}>
+                <span style={styles.withinLabel}>Kick-off</span>
+                <select style={styles.withinSelect} value={hourFilter} onChange={(e) => setHourFilter(e.target.value)}>
+                  <option value="all">Any time</option>
+                  {hourBuckets.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+                </select>
+              </label>
+            )}
             {isToday && (
               <label style={styles.withinField}>
                 <span style={styles.withinLabel}>Within</span>
