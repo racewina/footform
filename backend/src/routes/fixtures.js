@@ -1473,12 +1473,13 @@ router.get("/props-finder", async (req, res) => {
       .map((fx) => ({
         id: fx.id, home: fx.home, away: fx.away,
         league: fx.league.name, leagueId: fx.league.id, leagueFlag: fx.league.flag,
+        leagueContinent: continentFor(fx.league.country),
         kickoff: fx.startTimestamp,
       }))
       .sort((a, b) => (a.kickoff ?? 0) - (b.kickoff ?? 0));
     const leagueMap = new Map();
     for (const fx of upcoming) {
-      if (!leagueMap.has(fx.league.id)) leagueMap.set(fx.league.id, { id: fx.league.id, name: fx.league.name, flag: fx.league.flag });
+      if (!leagueMap.has(fx.league.id)) leagueMap.set(fx.league.id, { id: fx.league.id, name: fx.league.name, flag: fx.league.flag, continent: continentFor(fx.league.country) });
     }
     const leagueList = [...leagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1490,7 +1491,7 @@ router.get("/props-finder", async (req, res) => {
       const lg = LEAGUES_BY_ID[String(fx.leagueId)];
       if (!lg || lg.noProps || !fx.startTimestamp) continue;
       if (formatDate(new Date(fx.startTimestamp * 1000), tz) !== targetDate) continue;
-      if (!allLeagueMap.has(lg.id)) allLeagueMap.set(lg.id, { id: lg.id, name: lg.name, flag: lg.flag });
+      if (!allLeagueMap.has(lg.id)) allLeagueMap.set(lg.id, { id: lg.id, name: lg.name, flag: lg.flag, continent: continentFor(lg.country) });
     }
     const allLeagues = [...allLeagueMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 

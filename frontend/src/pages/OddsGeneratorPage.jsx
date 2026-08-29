@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const CONTINENT_ORDER = ["Europe", "South America", "North America", "Asia", "Africa", "International", "Other"];
 
 function ymd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -101,6 +102,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   const [within, setWithin] = useState("all");
   const [market, setMarket] = useState("all");
   const [picked, setPicked] = useState([]);     // selected league ids (strings)
+  const [continent, setContinent] = useState("all");
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [generated, setGenerated] = useState(null);
   // Gate code — remembered across visits once validated. Empty ⇒ show the lock.
@@ -137,10 +139,14 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
         const seen = new Map();
         for (const m of sel?.matches || []) {
           if (!inWindow(m.kickoff)) continue;
-          if (!seen.has(m.leagueId)) seen.set(m.leagueId, { id: m.leagueId, name: m.league, flag: m.leagueFlag });
+          if (!seen.has(m.leagueId)) seen.set(m.leagueId, { id: m.leagueId, name: m.league, flag: m.leagueFlag, continent: m.leagueContinent });
         }
         return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
       })();
+
+  // Continent filter: chips shown only when >1 continent has leagues that day.
+  const continents = CONTINENT_ORDER.filter((c) => leagues.some((l) => (l.continent || "Other") === c));
+  const shownLeagues = continent === "all" ? leagues : leagues.filter((l) => (l.continent || "Other") === continent);
 
   // Drop any picked league that's no longer offered in the current window/day.
   useEffect(() => {
@@ -169,7 +175,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
     setPicked((cur) => (cur.includes(id) ? cur : [...cur, id]));
   };
   const removeLeague = (id) => setPicked((cur) => cur.filter((x) => x !== id));
-  const addAll = () => setPicked(leagues.map((l) => String(l.id)));
+  const addAll = () => setPicked((cur) => [...new Set([...cur, ...shownLeagues.map((l) => String(l.id))])]);
   const clearAll = () => setPicked([]);
 
   const onGenerate = () => {
@@ -223,6 +229,15 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
         </span>
       </div>
 
+      {continents.length > 1 && (
+        <div style={styles.contBar}>
+          <button style={{ ...styles.contChip, ...(continent === "all" ? styles.contChipOn : {}) }} onClick={() => setContinent("all")}>All</button>
+          {continents.map((c) => (
+            <button key={c} style={{ ...styles.contChip, ...(continent === c ? styles.contChipOn : {}) }} onClick={() => setContinent(c)}>{c}</button>
+          ))}
+        </div>
+      )}
+
       <div style={styles.controls}>
         <label style={styles.field}>
           <span style={styles.fieldLabel}>Add league</span>
@@ -232,9 +247,9 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
             onChange={(e) => { addLeague(e.target.value); e.target.value = ""; }}
           >
             <option value="">
-              {leagues.length ? "Choose a league…" : "No leagues playing this date"}
+              {shownLeagues.length ? "Choose a league…" : "No leagues playing this date"}
             </option>
-            {leagues
+            {shownLeagues
               .filter((l) => !picked.includes(String(l.id)))
               .map((l) => (
                 <option key={l.id} value={String(l.id)}>{l.flag} {l.name}</option>
@@ -293,7 +308,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
             })}
           </div>
           <div style={styles.pickActions}>
-            <button style={styles.smallBtn} onClick={addAll}>Add all ({leagues.length})</button>
+            <button style={styles.smallBtn} onClick={addAll}>Add all ({shownLeagues.length})</button>
             {picked.length > 0 && <button style={styles.smallBtn} onClick={clearAll}>Clear</button>}
           </div>
         </div>
@@ -431,6 +446,9 @@ const styles = {
   selectOff: { opacity: 0.45, cursor: "not-allowed" },
 
   note: { display: "flex", alignItems: "flex-start", gap: 6, padding: "10px 24px", fontSize: 12, color: "var(--text3)", borderBottom: "1px solid var(--border)", lineHeight: 1.45 },
+  contBar: { display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 24px 0" },
+  contChip: { fontSize: 12, fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 20, padding: "4px 11px", cursor: "pointer" },
+  contChipOn: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)" },
   controls: { display: "flex", gap: 12, alignItems: "flex-end", padding: "14px 24px 10px", flexWrap: "wrap" },
   field: { display: "flex", flexDirection: "column", gap: 4 },
   fieldLabel: { fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 },
