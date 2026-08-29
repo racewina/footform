@@ -20,10 +20,17 @@ const WINDOWS = [
   { key: "6", label: "Next 6h" },
 ];
 
+// Label a kickoff-hour bucket, e.g. 6 → "6–7 AM".
+const hourLabel = (h) => {
+  const f = (x) => `${x % 12 === 0 ? 12 : x % 12} ${x < 12 ? "AM" : "PM"}`;
+  return `${f(h)}–${f((h + 1) % 24)}`;
+};
+
 // Leagues with fixtures for the date + window (drives the picker). finished=1 keeps
 // past/finished-match leagues in the list so the date nav can browse any day.
-async function fetchScanLeagues({ dateStr, within }) {
-  const res = await fetch(`/api/team-2plus/leagues?date=${dateStr}&within=${within}&finished=1&tz=${encodeURIComponent(TZ)}`, {
+async function fetchScanLeagues({ dateStr, within, hour }) {
+  const hourQ = hour === "all" ? "" : `&hour=${hour}`;
+  const res = await fetch(`/api/team-2plus/leagues?date=${dateStr}&within=${within}&finished=1${hourQ}&tz=${encodeURIComponent(TZ)}`, {
     headers: { "x-odds-pass": getToolPass() },
   });
   if (res.status === 401) { clearToolPass(); throw new Error("This tool is private."); }
@@ -77,6 +84,7 @@ export default function CornerGeneratorPage({ date, onDateChange, onOpenLeague }
   const [collapsed, setCollapsed] = useState(() => new Set());  // collapsed country groups
   const [pickerOpen, setPickerOpen] = useState(true);
   const [continent, setContinent] = useState("all");            // continent filter
+  const [hourFilter, setHourFilter] = useState("all");          // "all" | 0..23 kickoff-hour bucket
   const [generated, setGenerated] = useState(null);
 
   const effWithin = isToday ? within : "all"; // the time window only applies to today
@@ -92,13 +100,15 @@ export default function CornerGeneratorPage({ date, onDateChange, onOpenLeague }
     return ms >= nowMs - 10 * 60 * 1000 && ms <= withinCutoff;
   };
 
-  // League list, refetched whenever the date or window changes → auto-narrows.
+  // League list, refetched whenever the date/window/hour changes → auto-narrows.
   const lgQuery = useQuery({
-    queryKey: ["corner-leagues", dateStr, effWithin],
-    queryFn: () => fetchScanLeagues({ dateStr, within: effWithin }),
+    queryKey: ["corner-leagues", dateStr, effWithin, hourFilter],
+    queryFn: () => fetchScanLeagues({ dateStr, within: effWithin, hour: hourFilter }),
     staleTime: 60 * 1000,
+    placeholderData: (prev) => prev, // keep the picker + Kick-off list visible during refetch
   });
   const avail = lgQuery.data?.leagues || [];
+  const hourBuckets = lgQuery.data?.hours || [];
   const availKey = avail.map((l) => l.id).join(",");
 
   // Drop any selection that no longer has fixtures in the current date/window.
@@ -177,12 +187,14 @@ export default function CornerGeneratorPage({ date, onDateChange, onOpenLeague }
     next.setDate(next.getDate() + days);
     next.setHours(0, 0, 0, 0);
     setViewDate(next);
+    setHourFilter("all");
     const ids = [...selected].join(",");
     setGenerated(selCount ? { leagues: ids, dateStr: ymd(next), key: `${ids}:${ymd(next)}` } : null);
   };
 
+  const passHour = (ts) => hourFilter === "all" || (ts && new Date(ts * 1000).getHours() === Number(hourFilter));
   const data = board.data;
-  const matches = (data?.matches || []).filter((m) => inWindow(m.kickoff));
+  const matches = (data?.matches || []).filter((m) => inWindow(m.kickoff) && passHour(m.kickoff));
 
   return (
     <div style={styles.page}>
@@ -217,6 +229,15 @@ export default function CornerGeneratorPage({ date, onDateChange, onOpenLeague }
             {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
           </select>
         </label>
+        {hourBuckets.length > 1 && (
+          <label style={styles.fieldNarrow}>
+            <span style={styles.fieldLabel}>Kick-off</span>
+            <select style={styles.select} value={hourFilter} onChange={(e) => { setHourFilter(e.target.value); setGenerated(null); }}>
+              <option value="all">Any time</option>
+              {hourBuckets.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+            </select>
+          </label>
+        )}
         <div style={styles.spacer} />
         <button
           style={{ ...styles.genBtn, ...(selCount ? {} : styles.genBtnOff) }}

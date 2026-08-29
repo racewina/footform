@@ -19,10 +19,16 @@ const WINDOWS = [
 const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America"];
 // Continent chips (shown only when present in the day's leagues).
 const CONTINENT_ORDER = ["Europe", "South America", "North America", "Asia", "Africa", "International", "Other"];
+// Label a kickoff-hour bucket, e.g. 6 → "6–7 AM".
+const hourLabel = (h) => {
+  const f = (x) => `${x % 12 === 0 ? 12 : x % 12} ${x < 12 ? "AM" : "PM"}`;
+  return `${f(h)}–${f((h + 1) % 24)}`;
+};
 
 // Leagues that have upcoming fixtures for the date + window (drives the picker).
-async function fetchScanLeagues({ dateStr, within }) {
-  const res = await fetch(`/api/team-2plus/leagues?date=${dateStr}&within=${within}&tz=${encodeURIComponent(TZ)}`, {
+async function fetchScanLeagues({ dateStr, within, hour }) {
+  const hourQ = hour === "all" ? "" : `&hour=${hour}`;
+  const res = await fetch(`/api/team-2plus/leagues?date=${dateStr}&within=${within}${hourQ}&tz=${encodeURIComponent(TZ)}`, {
     headers: { "x-odds-pass": getToolPass() },
   });
   if (res.status === 401) { clearToolPass(); throw new Error("This tool is private."); }
@@ -69,6 +75,7 @@ export default function Team2PlusScanPage() {
   const [collapsed, setCollapsed] = useState(() => new Set());  // collapsed country groups
   const [pickerOpen, setPickerOpen] = useState(true);           // whole league panel open?
   const [continent, setContinent] = useState("all");            // continent filter
+  const [hourFilter, setHourFilter] = useState("all");          // "all" | 0..23 kickoff-hour bucket
   const [goals, setGoals] = useState(2);                        // 1 = to score, 2 = 2+ goals
   const [generated, setGenerated] = useState(null); // { leagues, mode, dateStr, within, goals, key }
 
@@ -77,13 +84,15 @@ export default function Team2PlusScanPage() {
   const effWithin = isToday ? within : "all"; // the time window only applies to today
   const prettyDate = viewDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 
-  // League list, refetched whenever the date or window changes → auto-narrows.
+  // League list, refetched whenever the date/window/hour changes → auto-narrows.
   const lgQuery = useQuery({
-    queryKey: ["t2p-leagues", dateStr, effWithin],
-    queryFn: () => fetchScanLeagues({ dateStr, within: effWithin }),
+    queryKey: ["t2p-leagues", dateStr, effWithin, hourFilter],
+    queryFn: () => fetchScanLeagues({ dateStr, within: effWithin, hour: hourFilter }),
     staleTime: 60 * 1000,
+    placeholderData: (prev) => prev, // keep the picker + Kick-off list visible during refetch
   });
   const avail = lgQuery.data?.leagues || [];
+  const hourBuckets = lgQuery.data?.hours || [];
   const availKey = avail.map((l) => l.id).join(",");
 
   // Drop any selection that no longer has fixtures in the current date/window.
@@ -150,6 +159,7 @@ export default function Team2PlusScanPage() {
   const shiftDay = (days) => {
     const next = new Date(viewDate); next.setDate(next.getDate() + days); next.setHours(0, 0, 0, 0);
     setViewDate(next);
+    setHourFilter("all");
     setGenerated(null);
   };
 
@@ -159,7 +169,11 @@ export default function Team2PlusScanPage() {
     enabled: !!generated,
   });
   const data = scan.data;
-  const rows = data?.rows || [];
+  // Upcoming picks are filtered to the chosen kickoff-hour bucket (rows carry
+  // kickoff); backtest rows are historical, so the hour filter doesn't apply.
+  const rows = (data?.mode === "upcoming" && hourFilter !== "all")
+    ? (data?.rows || []).filter((r) => r.kickoff && new Date(r.kickoff * 1000).getHours() === Number(hourFilter))
+    : (data?.rows || []);
   const gLabel = data?.goals === 1 ? "1+" : "2+"; // label for the generated result
   const multi = (data?.leagues?.length || 0) > 1;
   const scopeLabel = data
@@ -212,6 +226,15 @@ export default function Team2PlusScanPage() {
             {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
           </select>
         </label>
+        {hourBuckets.length > 1 && (
+          <label style={styles.fieldNarrow}>
+            <span style={styles.fieldLabel}>Kick-off</span>
+            <select style={styles.select} value={hourFilter} onChange={(e) => { setHourFilter(e.target.value); setGenerated(null); }}>
+              <option value="all">Any time</option>
+              {hourBuckets.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+            </select>
+          </label>
+        )}
         <div style={styles.spacer} />
         <button style={{ ...styles.btn, ...styles.btnAlt, ...(selCount ? {} : styles.btnOff) }} disabled={!selCount} onClick={() => run("backtest")}>
           📊 Backtest{selCount ? ` (${selCount})` : ""}

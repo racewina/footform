@@ -1993,7 +1993,10 @@ router.get("/team-2plus/leagues", async (req, res) => {
   // finished=1 keeps finished-match leagues in the All-day list too (the corner
   // generator browses past days); the 2+ scan omits it and lists upcoming only.
   const includeFinished = req.query.finished === "1";
-  const cacheKey = `t2p-leagues:${targetDate}:${within}:f${includeFinished ? 1 : 0}:${tz || "server"}`;
+  // hour = 0..23: narrow to fixtures kicking off in that local (viewer-tz) hour.
+  const hourReq = /^\d{1,2}$/.test(String(req.query.hour)) ? Number(req.query.hour) : NaN;
+  const hour = hourReq >= 0 && hourReq <= 23 ? hourReq : null;
+  const cacheKey = `t2p-leagues:${targetDate}:${within}:f${includeFinished ? 1 : 0}:h${hour ?? "x"}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
 
@@ -2007,12 +2010,17 @@ router.get("/team-2plus/leagues", async (req, res) => {
   const isToday = targetDate === formatDate(new Date(), tz);
   const windowed = within !== "all" && isToday;
   const cutoff = windowed ? nowSec + Number(within) * 3600 : Infinity;
+  // Local (viewer-tz) kickoff hour of a fixture, 0..23 — matches the browser's
+  // Date#getHours() when tz is the browser's zone, so client and server agree.
+  const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, hour: "2-digit", hourCycle: "h23" });
+  const hourOf = (ts) => Number(hourFmt.format(new Date(ts * 1000)));
 
   try {
     // Span the day in the viewer's tz across three UTC dates (boundary safety).
     const utcDates = [shiftYmd(targetDate, -1), targetDate, shiftYmd(targetDate, 1)];
     const lists = await Promise.all(utcDates.map((d) => fetchFixturesByDate(d).catch(() => [])));
     const counts = {};
+    const hoursSet = new Set(); // every base-passing fixture's hour → drives the bucket list
     for (const fx of lists.flat()) {
       const id = String(fx.leagueId);
       if (!LEAGUES_BY_ID[id] || !fx.startTimestamp) continue;
@@ -2023,13 +2031,16 @@ router.get("/team-2plus/leagues", async (req, res) => {
         if (fx.status !== "notstarted") continue;
         if (fx.startTimestamp < nowSec - 600 || fx.startTimestamp > cutoff) continue;
       }
+      const h = hourOf(fx.startTimestamp);
+      hoursSet.add(h);
+      if (hour != null && h !== hour) continue; // the chosen hour bucket only, if set
       counts[id] = (counts[id] || 0) + 1;
     }
     const leagues = Object.keys(counts).map((id) => {
       const l = LEAGUES_BY_ID[id];
       return { id: l.id, name: l.name, country: l.country, continent: continentFor(l.country), flag: l.flag, count: counts[id] };
     }).sort((a, b) => a.country.localeCompare(b.country) || a.name.localeCompare(b.name));
-    const result = { date: targetDate, within, leagues };
+    const result = { date: targetDate, within, hour, hours: [...hoursSet].sort((a, b) => a - b), leagues };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {
