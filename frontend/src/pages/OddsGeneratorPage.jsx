@@ -79,6 +79,12 @@ function koTime(ts) {
   if (!ts) return "";
   return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
+// Label a kickoff-hour bucket, e.g. 6 → "6–7 AM".
+const hourLabel = (h) => {
+  const f = (x) => `${x % 12 === 0 ? 12 : x % 12} ${x < 12 ? "AM" : "PM"}`;
+  return `${f(h)}–${f((h + 1) % 24)}`;
+};
+const kickoffHour = (ts) => (ts ? new Date(ts * 1000).getHours() : null);
 
 function pctColor(p) {
   if (p >= 65) return "#2ecc71";
@@ -100,6 +106,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   const dateStr = ymd(viewDate);
   const isToday = dateStr === ymd(new Date());
   const [within, setWithin] = useState("all");
+  const [hourFilter, setHourFilter] = useState("all"); // "all" | 0..23 — kickoff-hour bucket
   const [market, setMarket] = useState("all");
   const [picked, setPicked] = useState([]);     // selected league ids (strings)
   const [continent, setContinent] = useState("all");
@@ -126,6 +133,8 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
     const ms = ts * 1000;
     return ms >= nowMs - 10 * 60 * 1000 && ms <= withinCutoff;
   };
+  // Absolute kickoff-hour bucket (6–7 AM …), independent of "within" (relative).
+  const passHour = (ts) => hourFilter === "all" || kickoffHour(ts) === Number(hourFilter);
 
   const { data: sel } = useQuery({
     queryKey: ["oddsgen-leagues", dateStr],
@@ -133,16 +142,18 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   });
   // Leagues offered. "All day" lists every league with a match today; a time
   // window narrows to leagues with an UPCOMING match inside it.
-  const leagues = within === "all"
+  const leagues = (within === "all" && hourFilter === "all")
     ? (sel?.allLeagues || sel?.leagues || [])
     : (() => {
         const seen = new Map();
         for (const m of sel?.matches || []) {
-          if (!inWindow(m.kickoff)) continue;
+          if (!inWindow(m.kickoff) || !passHour(m.kickoff)) continue;
           if (!seen.has(m.leagueId)) seen.set(m.leagueId, { id: m.leagueId, name: m.league, flag: m.leagueFlag, continent: m.leagueContinent });
         }
         return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
       })();
+  // Distinct kickoff hours among the day's fixtures (drives the Kick-off buckets).
+  const hourBuckets = [...new Set((sel?.matches || []).map((m) => kickoffHour(m.kickoff)).filter((h) => h != null))].sort((a, b) => a - b);
 
   // Continent filter: chips shown only when >1 continent has leagues that day.
   const continents = CONTINENT_ORDER.filter((c) => leagues.some((l) => (l.continent || "Other") === c));
@@ -152,7 +163,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   useEffect(() => {
     setPicked((cur) => cur.filter((id) => leagues.some((l) => String(l.id) === String(id))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [within, dateStr, sel]);
+  }, [within, hourFilter, dateStr, sel]);
 
   const board = useQuery({
     queryKey: ["odds-gen", generated?.key],
@@ -198,12 +209,13 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
     next.setDate(next.getDate() + days);
     next.setHours(0, 0, 0, 0);
     setViewDate(next);
+    setHourFilter("all");
     setGenerated(null); // filters must be re-run for the new day
   };
 
   const data = board.data;
   const prettyDate = viewDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-  const matches = data?.matches || [];
+  const matches = (data?.matches || []).filter((m) => passHour(m.kickoff));
 
   if (!pass) {
     return <LockGate onUnlock={(code) => { try { localStorage.setItem(PASS_KEY, code); } catch {} setPass(code); }} />;
@@ -269,6 +281,16 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
             {WINDOWS.map((w) => <option key={w.key} value={w.key}>{w.label}</option>)}
           </select>
         </label>
+
+        {hourBuckets.length > 1 && (
+          <label style={styles.field}>
+            <span style={styles.fieldLabel}>Kick-off</span>
+            <select style={{ ...styles.select, minWidth: 130 }} value={hourFilter} onChange={(e) => setHourFilter(e.target.value)}>
+              <option value="all">Any time</option>
+              {hourBuckets.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+            </select>
+          </label>
+        )}
 
         <label style={styles.field}>
           <span style={styles.fieldLabel}>Market</span>
