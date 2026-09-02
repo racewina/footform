@@ -4,6 +4,10 @@ export const TTL = {
   LEAGUES: 24 * 60 * 60,
   FIXTURES: 30 * 60,
   TEAM_FORM: 6 * 60 * 60,
+  // Daily bet slates (VIP / Safe / Blend) freeze for the day: built once, then
+  // held so refreshes and cache rebuilds return the SAME picks all day. Keyed by
+  // date, so the next day gets a fresh slate.
+  SLATE: 24 * 60 * 60,
 };
 
 const cache = new NodeCache({ stdTTL: TTL.FIXTURES, checkperiod: 120 });

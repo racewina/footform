@@ -1083,7 +1083,7 @@ router.get("/accumulators", async (req, res) => {
     await attachBookOddsToSlips(slips, leagues);
 
     const result = { date: targetDate, totalMatches, slips };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
+    cacheSet(cacheKey, result, TTL.SLATE); // freeze the day's slate (see cache.js)
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[acca] ${err.message}`);
@@ -1203,7 +1203,7 @@ router.get("/vip", async (req, res) => {
     await attachBookOddsToSlips(southAmerica, saLeagues);
 
     const result = { date: targetDate, totalMatches, featured, southAmerica, slips };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
+    cacheSet(cacheKey, result, TTL.SLATE); // freeze the day's slate (see cache.js)
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[vip] ${err.message}`);
@@ -2311,10 +2311,13 @@ router.get("/blend-bets", async (req, res) => {
       .filter((g) => g && g.fixtures && g.fixtures.length)
       .map((g) => ({ league: g.league, fixtures: g.fixtures }));
 
-    const pool = await buildBlendPool(leagues, { includeFinished: false });
+    // includeFinished keeps already-played games in the pool so the day's slate
+    // doesn't shrink/reshuffle as matches kick off (predictions are frozen
+    // pre-kickoff), and TTL.SLATE freezes the built slate for the day.
+    const pool = await buildBlendPool(leagues, { includeFinished: true });
     const slips = TIERS.map((t) => buildBookAccumulator(pool, t.lo, t.hi));
     const result = { date: targetDate, poolSize: pool.length, slips };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
+    cacheSet(cacheKey, result, TTL.SLATE);
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[blend-bets] ${err.message}`);
