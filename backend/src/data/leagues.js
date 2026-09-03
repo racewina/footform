@@ -10,6 +10,7 @@ export const LEAGUES = [
   { id: "48", name: "EFL Cup", country: "England", tier: 1, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "43", name: "National League", country: "England", tier: 5, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "50", name: "National League North", country: "England", tier: 6, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  { id: "51", name: "National League South", country: "England", tier: 6, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   // Top European domestic cups (EFL Cup 48 is above with the English tiers).
   { id: "45", name: "FA Cup", country: "England", tier: 1, flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { id: "143", name: "Copa del Rey", country: "Spain", tier: 1, flag: "🇪🇸" },

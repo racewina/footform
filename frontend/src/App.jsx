@@ -207,6 +207,7 @@ const LEAGUE_NAMES = {
   "48": { name: "EFL Cup", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "43": { name: "National League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "50": { name: "National League North", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  "51": { name: "National League South", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "45": { name: "FA Cup", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "143": { name: "Copa del Rey", flag: "🇪🇸" },
   "137": { name: "Coppa Italia", flag: "🇮🇹" },
