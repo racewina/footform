@@ -155,18 +155,30 @@ app.get("/api/cron/warm", async (req, res) => {
     }
   }
 
+  // Warm SEQUENTIALLY, not concurrently. Each heavy /today build saturates the
+  // upstream 450 req/min rate gate on its own, so firing them in parallel makes
+  // them fight for slots and the whole cron overran maxDuration — leaving
+  // "tomorrow" perpetually cold. One at a time, a cold day is ~110-130s and the
+  // cheap /counts calls between them are ~1s, so today+tomorrow finish well
+  // inside the 300s function budget. A per-request timeout keeps one wedged
+  // build from starving the rest.
+  const REQ_TIMEOUT_MS = Number(process.env.WARM_REQ_TIMEOUT_MS || 200000);
   const started = Date.now();
-  const settled = await Promise.allSettled(
-    urls.map((u) => fetch(u).then((r) => r.status))
-  );
+  const warmed = [];
+  for (const u of urls) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), REQ_TIMEOUT_MS);
+    try {
+      const r = await fetch(u, { signal: ac.signal });
+      warmed.push({ url: u, status: r.status });
+    } catch {
+      warmed.push({ url: u, status: "error" });
+    } finally {
+      clearTimeout(t);
+    }
+  }
   res.set("Cache-Control", "no-store");
-  res.json({
-    warmed: urls.map((u, i) => ({
-      url: u,
-      status: settled[i].status === "fulfilled" ? settled[i].value : "error",
-    })),
-    ms: Date.now() - started,
-  });
+  res.json({ warmed, ms: Date.now() - started });
 });
 
 app.use((err, req, res, _next) => {
