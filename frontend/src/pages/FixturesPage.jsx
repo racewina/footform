@@ -201,7 +201,15 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
     queryKey: ["fixtures", leagueId, dateStr],
     queryFn: () => fetchFixtures(leagueId, dateStr),
     placeholderData: (prev) => prev, // keep the list visible while a new date loads (v5)
+    // A busy day returns progressively (partial slate + remaining leagues still
+    // building server-side). Poll until it's complete so the rest fill in on
+    // their own instead of the user having to reload.
+    refetchInterval: (query) => (query.state.data?.partial ? 4000 : false),
   });
+
+  // True while a heavy day is still filling in server-side (biggest leagues
+  // shown first; the rest arrive over the next few seconds).
+  const isPartial = !!data?.partial && data?.date === dateStr;
 
   // Live scores overlay (polled every 30s). Only relevant when viewing today.
   const liveMap = useLiveMap();
@@ -515,6 +523,12 @@ export default function FixturesPage({ leagueId, date, onDateChange }) {
 
       <div className="ff-list" style={styles.list}>
         {showLoading && <Spinner />}
+        {!showLoading && isPartial && (
+          <div style={styles.partialNote}>
+            <span style={styles.partialDot} aria-hidden="true" />
+            <span>Loading more leagues… the biggest are shown first.</span>
+          </div>
+        )}
         {isError && <p style={styles.error}>{error.message}</p>}
         {!showLoading && !isError && visibleCount === 0 && (
           <p style={styles.empty}>
@@ -1170,6 +1184,8 @@ const styles = {
   list: { flex: 1, overflowY: "auto", padding: "16px 24px", display: "flex", flexDirection: "column", gap: 16, maxWidth: 780, width: "100%", margin: "0 auto" },
   empty: { color: "var(--text3)", textAlign: "center", padding: 40 },
   error: { color: "var(--loss)", textAlign: "center", padding: 20 },
+  partialNote: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 12, color: "var(--text3)", padding: "8px 12px", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10 },
+  partialDot: { width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, animation: "ffPulse 1s ease-in-out infinite" },
   leagueGroup: { display: "flex", flexDirection: "column", gap: 10 },
   groupHeader: { display: "flex", alignItems: "center", gap: 8, padding: "2px 2px 4px" },
   groupTitle: { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "var(--text)" },

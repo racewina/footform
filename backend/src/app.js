@@ -50,11 +50,13 @@ app.use("/api", (req, res, next) => {
   if (req.method !== "GET" || req.path === "/health" || req.path === "/live" || req.path === "/cron/warm") return next();
   const sendJson = res.json.bind(res);
   res.json = (body) => {
+    // A partial slate (a heavy day still filling in) must not be cached at the
+    // edge, or it would be served as if complete until it expired. Keep it
+    // uncached so the client's refetch reaches the origin and gets more leagues.
+    const ok = res.statusCode >= 200 && res.statusCode < 300 && !(body && body.partial);
     res.set(
       "Cache-Control",
-      res.statusCode >= 200 && res.statusCode < 300
-        ? "public, s-maxage=180, stale-while-revalidate=86400"
-        : "no-store"
+      ok ? "public, s-maxage=180, stale-while-revalidate=86400" : "no-store"
     );
     return sendJson(body);
   };
@@ -85,7 +87,10 @@ app.use("/api", async (req, res, next) => {
   // Miss: let the route build it, then persist the result for the next cold path.
   const sendJson = res.json.bind(res);
   res.json = (body) => {
-    if (res.statusCode >= 200 && res.statusCode < 300 && body && !body.error) {
+    // Persist only a COMPLETE, successful slate. A partial (heavy day still
+    // filling in) is skipped so it can't be served back as the finished view;
+    // per-league snapshots carry the progress until the slate completes.
+    if (res.statusCode >= 200 && res.statusCode < 300 && body && !body.error && !body.partial) {
       saveSnapshot(key, body, SNAPSHOT_TTL).catch(() => {});
     }
     res.set("X-Snapshot", "miss");
