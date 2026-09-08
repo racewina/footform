@@ -1,13 +1,17 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getToolPass, clearToolPass } from "../components/ToolGate";
+import DateBar, { ymd, startOfToday } from "../components/DateBar";
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-async function fetchBlendBets(scope, band, kind) {
-  const base = kind === "team2plus" ? "/api/team-2plus" : "/api/blend-bets";
+async function fetchBlendBets(scope, band, kind, dateStr, isToday) {
+  const root = kind === "team2plus" ? "/api/team-2plus" : "/api/blend-bets";
+  const base = isToday ? root : `${root}/results`;
   let q = `?tz=${encodeURIComponent(TZ)}`;
   if (scope === "england") q += "&scope=england";
   if (kind !== "team2plus" && band === "high") q += "&band=high";
+  if (!isToday) q += `&date=${dateStr}`;
   const res = await fetch(`${base}${q}`, { headers: { "x-odds-pass": getToolPass() } });
   if (res.status === 401) { clearToolPass(); throw new Error("This tool is private."); }
   if (!res.ok) {
@@ -26,10 +30,16 @@ function oddsColor(prob) {
 }
 
 export default function BlendBetsPage({ onOpenFixture, scope, band, kind }) {
+  const [date, setDate] = useState(() => startOfToday());
+  const dateStr = ymd(date);
+  const isToday = dateStr === ymd(startOfToday());
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["blend-bets", scope || "all", band || "low", kind || "blend"],
-    queryFn: () => fetchBlendBets(scope, band, kind),
+    queryKey: ["blend-bets", scope || "all", band || "low", kind || "blend", dateStr],
+    queryFn: () => fetchBlendBets(scope, band, kind, dateStr, isToday),
+    keepPreviousData: true,
   });
+  const shift = (days) => setDate((p) => { const n = new Date(p); n.setDate(n.getDate() + days); return n; });
   const targets = band === "high" ? "10–20 and 20–50" : "3–5 and 7–10";
 
   const slips = data?.slips || [];
@@ -37,26 +47,24 @@ export default function BlendBetsPage({ onOpenFixture, scope, band, kind }) {
 
   return (
     <div style={styles.page}>
+      <DateBar date={date} onShift={shift} />
       <div style={styles.note}>
         <span aria-hidden="true">ⓘ</span>
         {kind === "team2plus" ? (
           <span>
             {scope === "england" && <strong>🏴󠁧󠁢󠁥󠁮󠁧󠁿 English leagues only. </strong>}
             Each leg is a <strong>team to score 2+ goals</strong> — the side the model
-            rates likeliest — priced at <strong>real bookmaker odds of 1.30 or higher</strong>;
-            teams priced below 1.30 don't qualify. Two accumulators combined to 10–15 and
-            15–50 odds, strongest events first. Estimates only — not betting advice, and
-            never guaranteed.
+            rates likeliest — priced at <strong>real bookmaker odds of 1.30 or higher</strong>.
+            Two accumulators combined to 10–15 and 15–50 odds.
+            {isToday ? " Estimates only — not betting advice." : " Step back to see how each slip landed."}
           </span>
         ) : (
           <span>
             {scope === "england" && <strong>🏴󠁧󠁢󠁥󠁮󠁧󠁿 English leagues only. </strong>}
             {band === "high" && <strong>Higher-risk. </strong>}
-            Two accumulators that blend the Safe Bets and VIP selection models,
-            combined to a {targets} odds target. <strong>Every leg is priced at
-            real bookmaker odds of 1.20 or higher</strong> (Bet365 and other supported
-            books) — selections priced below 1.20 don't qualify. Estimates only —
-            not betting advice, and never guaranteed.
+            Two accumulators that blend the Safe Bets and VIP models, combined to a {targets} odds
+            target. <strong>Every leg is priced at real bookmaker odds of 1.20 or higher.</strong>
+            {isToday ? " Estimates only — not betting advice." : " Step back to see how each slip landed."}
           </span>
         )}
       </div>
@@ -66,8 +74,9 @@ export default function BlendBetsPage({ onOpenFixture, scope, band, kind }) {
         {isError && <p style={styles.error}>{error.message}</p>}
         {!isLoading && !isError && !hasLegs && (
           <p style={styles.empty}>
-            No qualifying selections today — not enough matches with bookmaker odds at
-            1.20 or above to build a slip.
+            {isToday
+              ? "No qualifying selections today — not enough matches with bookmaker odds at 1.20 or above to build a slip."
+              : "No qualifying finished matches to build a slip from on this date."}
           </p>
         )}
         {!isLoading && !isError && hasLegs &&
@@ -78,31 +87,39 @@ export default function BlendBetsPage({ onOpenFixture, scope, band, kind }) {
 }
 
 function SlipCard({ slip, onOpenFixture }) {
-  const { target, legs, combinedBookOdds, combinedFairOdds, combinedProbability, inRange, legCount } = slip;
+  const { target, legs, combinedBookOdds, combinedFairOdds, combinedProbability, inRange, legCount, legHits, won } = slip;
+  const graded = won != null;
+  if (graded && legCount === 0) return null;
   return (
     <div style={styles.card}>
       <div style={styles.cardHead}>
         <div>
           <div style={styles.cardTitle}>Target {target.lo} – {target.hi} odds</div>
           <div style={styles.cardSub}>
-            {legCount} leg{legCount === 1 ? "" : "s"}
-            {combinedProbability != null && <> · {combinedProbability}% model chance</>}
-            {combinedFairOdds != null && <> · fair {combinedFairOdds.toFixed(2)}</>}
+            {graded
+              ? <>{legHits}/{legCount} legs landed · {combinedBookOdds.toFixed(2)} book odds</>
+              : <>{legCount} leg{legCount === 1 ? "" : "s"}
+                  {combinedProbability != null && <> · {combinedProbability}% model chance</>}
+                  {combinedFairOdds != null && <> · fair {combinedFairOdds.toFixed(2)}</>}</>}
           </div>
         </div>
-        <div style={styles.oddsBox}>
-          <span style={styles.oddsValue}>{combinedBookOdds.toFixed(2)}</span>
-          <span style={styles.oddsLabel}>book odds</span>
-        </div>
+        {graded ? (
+          <span style={{ ...styles.badge, ...(won ? styles.won : styles.lost) }}>{won ? "WON" : "LOST"}</span>
+        ) : (
+          <div style={styles.oddsBox}>
+            <span style={styles.oddsValue}>{combinedBookOdds.toFixed(2)}</span>
+            <span style={styles.oddsLabel}>book odds</span>
+          </div>
+        )}
       </div>
 
-      {!inRange && legCount > 0 && (
+      {!graded && !inRange && legCount > 0 && (
         <div style={styles.warn}>
           Couldn't land exactly in the target band with today's priced fixtures —
           this is the closest stack ({combinedBookOdds.toFixed(2)}).
         </div>
       )}
-      {legCount === 0 && (
+      {!graded && legCount === 0 && (
         <div style={styles.warn}>Not enough matches priced at 1.20+ today to reach this range.</div>
       )}
 
@@ -112,6 +129,7 @@ function SlipCard({ slip, onOpenFixture }) {
 }
 
 function Leg({ leg, onOpenFixture }) {
+  const graded = leg.hit != null;
   const kickoff = leg.kickoff
     ? new Date(leg.kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "--:--";
@@ -122,20 +140,30 @@ function Leg({ leg, onOpenFixture }) {
       style={{ ...styles.leg, ...(clickable ? { cursor: "pointer" } : {}) }}
       {...(clickable ? { role: "button", tabIndex: 0, onClick: open, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }, title: "Open this fixture" } : {})}
     >
+      {graded && <span style={styles.legIcon}>{leg.hit ? "✅" : "❌"}</span>}
       <div style={styles.legMain}>
         <div style={styles.legMatch}>
           <span style={styles.legTeams}>{leg.home} v {leg.away}</span>
-          <span style={styles.legMeta}>{leg.leagueFlag} {leg.league} · {kickoff}</span>
+          <span style={styles.legMeta}>{leg.leagueFlag} {leg.league}{!graded && <> · {kickoff}</>}</span>
         </div>
         <div style={styles.legPick}>
-          <span style={styles.legSelection}>{leg.selection}</span>
+          <span style={{ ...styles.legSelection, ...(graded && !leg.hit ? { color: "var(--text3)" } : {}) }}>{leg.selection}</span>
           <span style={styles.legMarket}>{leg.market}</span>
         </div>
       </div>
       <div style={styles.legNums}>
-        <span style={styles.legBookOdds}>{leg.bookOdds.toFixed(2)}</span>
-        <span style={styles.legBookmaker}>{leg.bookmaker}</span>
-        <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}% · fair {leg.odds.toFixed(2)}</span>
+        {graded ? (
+          <>
+            <span style={styles.legScore}>{leg.homeScore}–{leg.awayScore}</span>
+            <span style={styles.legBookOdds}>{leg.bookOdds.toFixed(2)}</span>
+          </>
+        ) : (
+          <>
+            <span style={styles.legBookOdds}>{leg.bookOdds.toFixed(2)}</span>
+            <span style={styles.legBookmaker}>{leg.bookmaker}</span>
+            <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}% · fair {leg.odds.toFixed(2)}</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -163,10 +191,14 @@ const styles = {
   oddsBox: { display: "flex", flexDirection: "column", alignItems: "flex-end" },
   oddsValue: { fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 800, color: "var(--accent)" },
   oddsLabel: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5 },
+  badge: { fontSize: 13, fontWeight: 800, letterSpacing: 0.5, borderRadius: 8, padding: "4px 12px" },
+  won: { color: "#04121f", background: "#2ecc71" },
+  lost: { color: "#fff", background: "#e74c3c" },
 
   warn: { fontSize: 12, color: "#f1c40f", padding: "8px 16px", borderBottom: "1px solid var(--border)" },
 
   leg: { display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid var(--border)" },
+  legIcon: { fontSize: 15, flexShrink: 0 },
   legMain: { flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   legMatch: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0 },
   legTeams: { fontSize: 14, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
@@ -178,4 +210,5 @@ const styles = {
   legBookOdds: { fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 800, color: "var(--text)" },
   legBookmaker: { fontSize: 10, color: "var(--text3)" },
   legProb: { fontSize: 11, fontWeight: 600 },
+  legScore: { fontSize: 14, fontWeight: 700, color: "var(--text)" },
 };

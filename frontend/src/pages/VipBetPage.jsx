@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import DateBar, { ymd, startOfToday } from "../components/DateBar";
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-async function fetchVip() {
-  const res = await fetch(`/api/vip?tz=${encodeURIComponent(TZ)}`);
+async function fetchVip(dateStr, isToday) {
+  const url = isToday
+    ? `/api/vip?tz=${encodeURIComponent(TZ)}`
+    : `/api/vip/results?date=${dateStr}&tz=${encodeURIComponent(TZ)}`;
+  const res = await fetch(url);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Failed (${res.status})`);
@@ -20,58 +25,53 @@ function oddsColor(prob) {
 }
 
 export default function VipBetPage({ onOpenFixture }) {
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["vip"],
-    queryFn: fetchVip,
-  });
+  const [date, setDate] = useState(() => startOfToday());
+  const dateStr = ymd(date);
+  const isToday = dateStr === ymd(startOfToday());
 
-  // Three batches: the headline "Top Matches" from the marquee competitions, a
-  // dedicated "South America" slate (CONMEBOL, calibrated for its lower-scoring
-  // profile so it isn't crowded out of the general list), then the general slate.
-  // Each later list drops matches already shown above it, so none appears twice.
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["vip", dateStr],
+    queryFn: () => fetchVip(dateStr, isToday),
+    keepPreviousData: true,
+  });
+  const shift = (days) => setDate((p) => { const n = new Date(p); n.setDate(n.getDate() + days); return n; });
+
   const featured = (data?.featured || []).filter((s) => s.legCount > 0);
   const featuredIds = new Set(featured.map((s) => s.matchId));
-  const southAmerica = (data?.southAmerica || []).filter(
-    (s) => s.legCount > 0 && !featuredIds.has(s.matchId)
-  );
+  const southAmerica = (data?.southAmerica || []).filter((s) => s.legCount > 0 && !featuredIds.has(s.matchId));
   const shownIds = new Set([...featuredIds, ...southAmerica.map((s) => s.matchId)]);
   const others = (data?.slips || []).filter((s) => s.legCount > 0 && !shownIds.has(s.matchId));
   const hasAny = featured.length > 0 || southAmerica.length > 0 || others.length > 0;
 
   return (
     <div style={styles.page}>
+      <DateBar date={date} onShift={shift} />
       <div style={styles.note}>
         <span aria-hidden="true">💎</span>
         <span>
-          A <strong>bet builder</strong> per match — every pick our model rates
-          likely (favourite to win, either side to score or score 2+, over 2.5,
-          both teams to score, first-half corners), each with its % and fair
-          price, plus a combined price for the lot. Build your own from the menu.
-          <strong> Top Matches</strong> features the headline competitions; the
-          rest follows. Estimates, not advice.
+          A <strong>bet builder</strong> per match — every pick our model rates likely
+          (favourite to win, either side to score or score 2+, over 2.5, both teams to
+          score), each with its % and fair price.{" "}
+          {isToday
+            ? "Build your own from the menu. Estimates, not advice."
+            : "Stepped back to a past day — each leg is graded against the result (first-half corner legs can't be settled)."}
         </span>
       </div>
 
       <div style={styles.list}>
         {isLoading && <Spinner />}
         {isError && <p style={styles.error}>{error.message}</p>}
-        {!isLoading && !isError && data?.totalMatches === 0 && (
-          <p style={styles.empty}>No scheduled matches today to build a VIP slip from.</p>
-        )}
-        {!isLoading && !isError && data?.totalMatches > 0 && !hasAny && (
+        {!isLoading && !isError && !hasAny && (
           <p style={styles.empty}>
-            No clear favourites to build on today. Check back closer to kickoff.
+            {isToday ? "No clear favourites to build on today. Check back closer to kickoff."
+                     : "No qualifying VIP slip from this date's finished matches."}
           </p>
         )}
 
-        {featured.length > 0 && (
-          <SectionTitle icon="⭐" title="Top Matches" subtitle="Headline competitions" />
-        )}
+        {featured.length > 0 && <SectionTitle icon="⭐" title="Top Matches" subtitle="Headline competitions" />}
         {featured.map((slip) => <SlipCard key={`f-${slip.matchId}`} slip={slip} onOpenFixture={onOpenFixture} />)}
 
-        {southAmerica.length > 0 && (
-          <SectionTitle icon="🌎" title="South America" subtitle="CONMEBOL · calibrated" />
-        )}
+        {southAmerica.length > 0 && <SectionTitle icon="🌎" title="South America" subtitle="CONMEBOL · calibrated" />}
         {southAmerica.map((slip) => <SlipCard key={`sa-${slip.matchId}`} slip={slip} onOpenFixture={onOpenFixture} />)}
 
         {(featured.length > 0 || southAmerica.length > 0) && others.length > 0 && (
@@ -94,10 +94,9 @@ function SectionTitle({ icon, title, subtitle }) {
 }
 
 function SlipCard({ slip, onOpenFixture }) {
-  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount, leagueId, matchId } = slip;
-  const ko = kickoff
-    ? new Date(kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : "--:--";
+  const { lean, home, away, leagueFlag, league, kickoff, legs, combinedOdds, legCount, leagueId, matchId, legHits, won } = slip;
+  const graded = won != null;
+  const ko = kickoff ? new Date(kickoff * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "--:--";
   const clickable = !!(onOpenFixture && leagueId);
   const open = () => clickable && onOpenFixture(leagueId, kickoff, matchId);
   return (
@@ -107,18 +106,19 @@ function SlipCard({ slip, onOpenFixture }) {
     >
       <div style={styles.cardHead}>
         <div style={{ minWidth: 0 }}>
-          <div style={styles.cardTitle}>
-            <span style={styles.diamond}>💎</span> {home} v {away}
-          </div>
+          <div style={styles.cardTitle}><span style={styles.diamond}>💎</span> {home} v {away}</div>
           <div style={styles.cardSub}>
-            {leagueFlag} {league} · {ko} · {legCount} pick{legCount === 1 ? "" : "s"}
-            {lean ? <> · {lean}</> : null}
+            {leagueFlag} {league} · {graded ? <>{legHits}/{legCount} legs landed</> : <>{ko} · {legCount} pick{legCount === 1 ? "" : "s"}{lean ? <> · {lean}</> : null}</>}
           </div>
         </div>
-        <div style={styles.oddsBox}>
-          <span style={styles.oddsValue}>{combinedOdds.toFixed(2)}</span>
-          <span style={styles.oddsLabel}>all legs</span>
-        </div>
+        {graded ? (
+          <span style={{ ...styles.badge, ...(won ? styles.won : styles.lost) }}>{won ? "WON" : "LOST"}</span>
+        ) : (
+          <div style={styles.oddsBox}>
+            <span style={styles.oddsValue}>{combinedOdds.toFixed(2)}</span>
+            <span style={styles.oddsLabel}>all legs</span>
+          </div>
+        )}
       </div>
 
       {legs.map((leg) => <Leg key={leg.marketKey} leg={leg} />)}
@@ -127,22 +127,31 @@ function SlipCard({ slip, onOpenFixture }) {
 }
 
 function Leg({ leg }) {
+  const graded = leg.hit != null;
   return (
     <div style={styles.leg}>
+      {graded && <span style={styles.legIcon}>{leg.hit ? "✅" : "❌"}</span>}
       <div style={styles.legMain}>
-        <span style={styles.legSelection}>{leg.selection}</span>
+        <span style={{ ...styles.legSelection, ...(graded && !leg.hit ? { color: "var(--text3)" } : {}) }}>{leg.selection}</span>
         <div style={styles.legMetaRow}>
           <span style={styles.legMarket}>{leg.market}</span>
-          {leg.bookOdds != null && (
+          {!graded && leg.bookOdds != null && (
             <span style={styles.legBook}>Best {leg.bookOdds.toFixed(2)} @ {leg.bookmaker}</span>
           )}
         </div>
       </div>
       <div style={styles.legNums}>
-        <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}%</span>
-        <span style={styles.legOdds}>
-          {leg.bookOdds != null ? <>fair {leg.odds.toFixed(2)}</> : leg.odds.toFixed(2)}
-        </span>
+        {graded ? (
+          <>
+            <span style={styles.legScore}>{leg.homeScore}–{leg.awayScore}</span>
+            <span style={styles.legOdds}>{leg.odds.toFixed(2)}</span>
+          </>
+        ) : (
+          <>
+            <span style={{ ...styles.legProb, color: oddsColor(leg.probability) }}>{leg.probability}%</span>
+            <span style={styles.legOdds}>{leg.bookOdds != null ? <>fair {leg.odds.toFixed(2)}</> : leg.odds.toFixed(2)}</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -176,18 +185,19 @@ const styles = {
   oddsBox: { display: "flex", flexDirection: "column", alignItems: "flex-end" },
   oddsValue: { fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 800, color: "var(--accent)" },
   oddsLabel: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5 },
+  badge: { fontSize: 13, fontWeight: 800, letterSpacing: 0.5, borderRadius: 8, padding: "4px 12px" },
+  won: { color: "#04121f", background: "#2ecc71" },
+  lost: { color: "#fff", background: "#e74c3c" },
 
   leg: { display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: "1px solid var(--border)" },
+  legIcon: { fontSize: 15, flexShrink: 0 },
   legMain: { flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
-  legMatch: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0 },
-  legTeams: { fontSize: 14, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  legMeta: { fontSize: 11, color: "var(--text3)" },
-  legPick: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  legMetaRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   legSelection: { fontSize: 14, fontWeight: 600, color: "var(--accent)" },
+  legMetaRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   legMarket: { fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4, background: "var(--bg3)", borderRadius: 4, padding: "1px 6px" },
   legBook: { fontSize: 11, color: "var(--text2)" },
   legNums: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 },
   legProb: { fontSize: 14, fontWeight: 700 },
+  legScore: { fontSize: 14, fontWeight: 700, color: "var(--text)" },
   legOdds: { fontSize: 12, color: "var(--text2)" },
 };

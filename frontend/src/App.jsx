@@ -5,8 +5,8 @@ import Sidebar from "./components/Sidebar";
 import FixturesPage from "./pages/FixturesPage";
 import ResultsPage from "./pages/ResultsPage";
 import SafeBetsPage from "./pages/SafeBetsPage";
-import SafeBetsResultsPage from "./pages/SafeBetsResultsPage";
 import VipBetPage from "./pages/VipBetPage";
+import EuropeStrongestPage from "./pages/EuropeStrongestPage";
 import ValueBetsPage from "./pages/ValueBetsPage";
 import PropsFinderPage from "./pages/PropsFinderPage";
 import OddsGeneratorPage from "./pages/OddsGeneratorPage";
@@ -14,7 +14,6 @@ import CornerGeneratorPage from "./pages/CornerGeneratorPage";
 import EventGeneratorPage from "./pages/EventGeneratorPage";
 import Team2PlusScanPage from "./pages/Team2PlusScanPage";
 import BlendBetsPage from "./pages/BlendBetsPage";
-import BlendBetsResultsPage from "./pages/BlendBetsResultsPage";
 import ToolGate from "./components/ToolGate";
 import RoiPage from "./pages/RoiPage";
 import PullToRefresh from "./components/PullToRefresh";
@@ -157,12 +156,22 @@ export default function App() {
               ? <ToolGate title="Corner Generator"><CornerGeneratorPage date={viewDate} onDateChange={setViewDate} onOpenLeague={navigate} /></ToolGate>
             : selectedLeague === "event-gen"
               ? <ToolGate title="Event Generator"><EventGeneratorPage date={viewDate} /></ToolGate>
+            : selectedLeague === "europe-strongest"
+              ? <EuropeStrongestPage />
             : selectedLeague === "team2plus-scan"
               ? <ToolGate title="2+ Goals Scan"><Team2PlusScanPage /></ToolGate>
+            : selectedLeague === "team2plus-all"
+              ? <ToolGate title="Team 2+ Goals"><BlendBetsPage kind="team2plus" onOpenFixture={openFixture} /></ToolGate>
+            : selectedLeague === "team2plus-eng"
+              ? <ToolGate title="England 2+ Goals"><BlendBetsPage kind="team2plus" scope="england" onOpenFixture={openFixture} /></ToolGate>
             : selectedLeague === "blend-bets"
               ? <ToolGate title="Blend Bets"><BlendBetsPage onOpenFixture={openFixture} /></ToolGate>
-            : selectedLeague === "blend-results"
-              ? <ToolGate title="Blend Bets Record"><BlendBetsResultsPage /></ToolGate>
+            : selectedLeague === "blend-high"
+              ? <ToolGate title="Blend Bets 10–50"><BlendBetsPage band="high" onOpenFixture={openFixture} /></ToolGate>
+            : selectedLeague === "blend-england"
+              ? <ToolGate title="England Blend Bets"><BlendBetsPage scope="england" onOpenFixture={openFixture} /></ToolGate>
+            : selectedLeague === "blend-england-high"
+              ? <ToolGate title="England Blend 10–50"><BlendBetsPage scope="england" band="high" onOpenFixture={openFixture} /></ToolGate>
             : selectedLeague === "roi"
               ? <RoiPage />
             : selectedLeague === "value"
@@ -171,8 +180,6 @@ export default function App() {
               ? <VipBetPage onOpenFixture={openFixture} />
               : selectedLeague === "safebets"
                 ? <SafeBetsPage onOpenFixture={openFixture} />
-                : selectedLeague === "safe-results"
-                  ? <SafeBetsResultsPage />
                   : selectedLeague
                     ? <FixturesPage leagueId={selectedLeague} date={viewDate} onDateChange={setViewDate} focusMatchId={focusMatch} />
                     : <NoLeaguePrompt />
@@ -189,15 +196,19 @@ const LEAGUE_NAMES = {
   "today": { name: "Today's Matches", flag: "📅" },
   "results": { name: "Track Record", flag: "📊" },
   "safebets": { name: "Safe Bets", flag: "🎯" },
-  "safe-results": { name: "Safe Bets Record", flag: "🧾" },
   "vip": { name: "VIP Bet", flag: "💎" },
   "props-finder": { name: "Props Finder", flag: "🔎" },
   "odds-gen": { name: "Odds Generator", flag: "🎰" },
   "corner-gen": { name: "Corner Generator", flag: "⛳" },
   "event-gen": { name: "Event Generator", flag: "⚡" },
+  "europe-strongest": { name: "Europe Strongest Matches", flag: "🌍" },
   "team2plus-scan": { name: "2+ Goals Scan", flag: "📊" },
+  "team2plus-all": { name: "Team 2+ Goals", flag: "⚽" },
+  "team2plus-eng": { name: "England 2+ Goals", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "blend-bets": { name: "Blend Bets", flag: "🔀" },
-  "blend-results": { name: "Blend Bets Record", flag: "🔀" },
+  "blend-high": { name: "Blend Bets 10–50", flag: "🔀" },
+  "blend-england": { name: "England Blend Bets", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
+  "blend-england-high": { name: "England Blend 10–50", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   "value": { name: "Value Bets", flag: "📈" },
   "roi": { name: "ROI Tracker", flag: "💹" },
   "39": { name: "Premier League", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

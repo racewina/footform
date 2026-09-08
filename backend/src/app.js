@@ -152,6 +152,9 @@ app.get("/api/cron/warm", async (req, res) => {
       const q = `date=${ymdInTz(tz, addDays)}&tz=${encodeURIComponent(tz)}`;
       urls.push(`${base}/api/today?${q}`);
       urls.push(`${base}/api/counts?${q}`);
+      // Generate + freeze today's Europe Strongest slate early, so it captures the
+      // full upcoming European card before games kick off (not an empty evening slate).
+      if (addDays === 0) urls.push(`${base}/api/europe-strongest?${q}`);
     }
   }
 

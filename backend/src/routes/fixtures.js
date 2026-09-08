@@ -2251,6 +2251,53 @@ async function buildBlendPool(leagues, { includeFinished = false } = {}) {
   return pool;
 }
 
+// "Team to score 2+ goals" accumulator pool. Mirrors buildBlendPool, but every
+// leg is fixed to the favoured side's 2+ market (teamGoalPick) and gated on a
+// higher book floor — a 2+ prop pays more, so a lower floor would let near-
+// certainties with no value in. One leg per fixture; graded when the source is a
+// finished result so the same builder backs both the live view and the record.
+const TEAM2PLUS_MIN_BOOK = 1.3;
+async function buildTeam2PlusPool(leagues, { includeFinished = false } = {}) {
+  const ranked = [];
+  for (const g of leagues) {
+    if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
+    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
+    for (const fx of g.fixtures) {
+      if (!fx.homeTeam?.id || !fx.awayTeam?.id || !fx.prediction?.markets) continue;
+      if (!includeFinished && fx.status === "finished") continue;
+      const pick = teamGoalPick(fx.prediction.markets, fx.homeTeam.name, fx.awayTeam.name, 2);
+      if (!pick) continue;
+      ranked.push({ g, fx, pick });
+    }
+  }
+  ranked.sort((a, b) => b.pick.prob - a.pick.prob);
+  const shortlist = ranked.slice(0, BLEND_SHORTLIST);
+
+  const pool = [];
+  for (const { g, fx, pick } of shortlist) {
+    const odds = await getFixtureOdds(fx.id).catch(() => null);
+    if (!odds?.best) continue;
+    const priced = bestBookOddsForLeg(
+      odds.best,
+      { marketKey: pick.marketKey, selection: goalSel(pick.team, 2) },
+      fx.prediction.markets.winner
+    );
+    if (!priced || priced.odds < TEAM2PLUS_MIN_BOOK) continue;
+    const leg = {
+      matchId: fx.id, leagueId: g.league?.id, home: fx.homeTeam.name, away: fx.awayTeam.name,
+      homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo,
+      league: g.league?.name, leagueFlag: g.league?.flag, kickoff: fx.startTimestamp,
+      market: "Team Goals", marketKey: pick.marketKey, selection: goalSel(pick.team, 2),
+      probability: pick.prob, odds: Math.round((100 / pick.prob) * 100) / 100,
+      bookOdds: priced.odds, bookmaker: priced.book,
+    };
+    if (fx.grade?.grades?.[pick.marketKey]) leg.hit = !!fx.grade.grades[pick.marketKey].hit;
+    if (fx.homeScore != null && fx.awayScore != null) { leg.homeScore = fx.homeScore; leg.awayScore = fx.awayScore; }
+    pool.push(leg);
+  }
+  return pool;
+}
+
 // Cheap "which of our leagues have a fixture on this date" pass — one
 // fixtures-by-date call per spanning UTC date (the same source /counts uses),
 // NOT a per-league build. `status` filters to "finished" (record) or
@@ -2325,6 +2372,85 @@ router.get("/blend-bets", async (req, res) => {
   }
 });
 
+// "Team 2+ Goals" accumulators: every leg is a team to score 2+ goals, priced at
+// real book odds (>= 1.30), stacked to two combined-odds bands (10-15 / 15-50).
+// Uses fill mode so the two tiers keep different leg counts even though 2+ legs
+// are chunky. scope=england restricts to the English pyramid; default scans the
+// leagues actually playing that day. Slate frozen for the day (TTL.SLATE).
+router.get("/team-2plus", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  const scope = req.query.scope === "england" ? "england" : "all";
+  const TIERS = [{ lo: 10, hi: 15 }, { lo: 15, hi: 50 }];
+
+  const cacheKey = `team-2plus:${scope}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    const poolIds = scope === "england"
+      ? LEAGUES.filter((l) => l.country === "England").map((l) => String(l.id))
+      : await leaguesPlayedOn(targetDate, tz, "notstarted");
+    const groups = await Promise.all(
+      poolIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups
+      .filter((g) => g && g.fixtures && g.fixtures.length)
+      .map((g) => ({ league: g.league, fixtures: g.fixtures }));
+
+    const pool = await buildTeam2PlusPool(leagues, { includeFinished: true });
+    const slips = TIERS.map((t) => buildBookAccumulator(pool, t.lo, t.hi, { fill: true }));
+    const result = { date: targetDate, poolSize: pool.length, slips };
+    cacheSet(cacheKey, result, TTL.SLATE);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[team-2plus] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Team 2+ track record: rebuild the same 2+ accumulators from a past day's
+// FINISHED matches (frozen pre-kickoff picks) and grade every leg.
+router.get("/team-2plus/results", async (req, res) => {
+  if (String(req.get("x-odds-pass") || req.query.pass || "") !== ODDS_GEN_PASS) {
+    return res.status(401).json({ error: "This tool is private." });
+  }
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  const scope = req.query.scope === "england" ? "england" : "all";
+  const TIERS = [{ lo: 10, hi: 15 }, { lo: 15, hi: 50 }];
+
+  const cacheKey = `team-2plus-results:${scope}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    let ids = await leaguesPlayedOn(targetDate, tz, "finished");
+    if (scope === "england") {
+      const eng = new Set(LEAGUES.filter((l) => l.country === "England").map((l) => String(l.id)));
+      ids = ids.filter((id) => eng.has(String(id)));
+    }
+    const groups = await Promise.all(
+      ids.map((id) => buildLeagueResults(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups
+      .filter((g) => g && g.matches && g.matches.length)
+      .map((g) => ({ league: g.league, fixtures: g.matches }));
+
+    const pool = await buildTeam2PlusPool(leagues, { includeFinished: true });
+    const slips = TIERS.map((t) => buildBookAccumulator(pool, t.lo, t.hi, { fill: true }));
+    const result = { date: targetDate, scope, poolSize: pool.length, slips };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[team-2plus-results] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Blend Bets track record: rebuild the same book-gated slips from a past day's
 // FINISHED matches (predictions reconstructed pre-kickoff; bookmaker odds still
 // retrievable for recent fixtures) and grade each leg against the real result.
@@ -2334,8 +2460,54 @@ router.get("/blend-bets/results", async (req, res) => {
   }
   const tz = req.query.tz;
   const targetDate = req.query.date || formatDate(new Date(), tz);
+  // Same band/scope knobs as the generator, so each Blend view has a matching
+  // record: band=high grades the 10-20 / 20-50 slips, default the 3-5 / 7-10;
+  // scope=england restricts to the English pyramid.
+  const scope = req.query.scope === "england" ? "england" : "all";
+  const band = req.query.band === "high" ? "high" : "low";
+  const TIERS = band === "high"
+    ? [{ lo: 10, hi: 20 }, { lo: 20, hi: 50 }]
+    : [{ lo: 3, hi: 5 }, { lo: 7, hi: 10 }];
 
-  const cacheKey = `blend-results:${targetDate}:${tz || "server"}`;
+  const cacheKey = `blend-results:${scope}:${band}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Only rebuild leagues that actually had a FINISHED match on the date.
+    let ids = await leaguesPlayedOn(targetDate, tz, "finished");
+    if (scope === "england") {
+      const eng = new Set(LEAGUES.filter((l) => l.country === "England").map((l) => String(l.id)));
+      ids = ids.filter((id) => eng.has(String(id)));
+    }
+    const groups = await Promise.all(
+      ids.map((id) => buildLeagueResults(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups
+      .filter((g) => g && g.matches && g.matches.length)
+      .map((g) => ({ league: g.league, fixtures: g.matches }));
+
+    const pool = await buildBlendPool(leagues, { includeFinished: true });
+    const slips = TIERS.map((t) => buildBookAccumulator(pool, t.lo, t.hi));
+    const result = { date: targetDate, band, scope, poolSize: pool.length, slips };
+    cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[blend-results] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// VIP Bet track record: rebuild the same per-match VIP builders from a past day's
+// FINISHED matches (predictions reconstructed pre-kickoff; legs graded from the
+// real score). Mirrors the live /vip's marquee / South America / all-leagues
+// split. No corner enrichment — the feed has no per-half corner data to settle,
+// and buildVipSlips omits corner legs when no cornerMap is passed.
+router.get("/vip/results", async (req, res) => {
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+
+  const cacheKey = `vip-results:${targetDate}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
 
@@ -2349,13 +2521,131 @@ router.get("/blend-bets/results", async (req, res) => {
       .filter((g) => g && g.matches && g.matches.length)
       .map((g) => ({ league: g.league, fixtures: g.matches }));
 
-    const pool = await buildBlendPool(leagues, { includeFinished: true });
-    const slips = [{ lo: 3, hi: 5 }, { lo: 7, hi: 10 }].map((t) => buildBookAccumulator(pool, t.lo, t.hi));
-    const result = { date: targetDate, poolSize: pool.length, slips };
+    const marqueeLeagues = leagues.filter((g) => MARQUEE_LEAGUES.has(String(g.league.id)));
+    const featured = buildVipSlips(marqueeLeagues, {}, 6);
+    const slips = buildVipSlips(leagues, {});
+    const saLeagues = leagues.filter((g) => SOUTH_AMERICAN_LEAGUES.has(String(g.league.id)));
+    const southAmerica = buildVipSlips(saLeagues, {}, 6, SA_FLOOR);
+
+    const result = { date: targetDate, featured, southAmerica, slips };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {
-    console.error(`[blend-results] ${err.message}`);
+    console.error(`[vip-results] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Europe Strongest Matches — a curated, FROZEN daily pool of the strongest
+// European predictions that still pay >= 1.50 at the book. Four INDEPENDENT
+// categories (win / BTTS / over 2.5 / team to score 2+): a match can appear in
+// several, but each on that category's own model probability, never copied.
+// Ranked by model probability (strongest first), NOT by odds — the 1.50 floor
+// just removes the heavy favourites that pay less than that. Netherlands, Finland, Estonia
+// and Iceland are excluded at source. Frozen for the day (TTL.SLATE) with the
+// generation timestamp and the book odds captured at generation time, so every
+// user sees the same list all day and changing odds never swap a pick out.
+const EUROPE_STRONGEST_EXCLUDE = new Set(["Netherlands", "Finland", "Estonia", "Iceland"]);
+const STRONGEST_MIN_BOOK = 1.5;   // the selection's own displayed book odds floor
+const STRONGEST_MIN_PROB = { win: 55, btts: 55, over25: 55, team2plus: 55 };
+const STRONGEST_PER_CATEGORY = 15;
+
+router.get("/europe-strongest", async (req, res) => {
+  const tz = req.query.tz;
+  const targetDate = req.query.date || formatDate(new Date(), tz);
+  // Diagnostic/record mode: also scan already-finished games (using their frozen
+  // pre-kickoff predictions) and grade every pick against the final score. Lets
+  // us reconstruct what the morning slate would have been after the games have
+  // already played. Default (off) keeps the live section to upcoming matches only.
+  const includeFinished = req.query.includeFinished === "1" || req.query.finished === "1";
+
+  const cacheKey = `europe-strongest:${includeFinished ? "rec" : "live"}:${targetDate}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    // Only European leagues playing that day, minus the excluded countries.
+    const ids = await leaguesPlayedOn(targetDate, tz, includeFinished ? undefined : "notstarted");
+    const euIds = ids.filter((id) => {
+      const l = LEAGUES_BY_ID[id];
+      return l && !l.friendly && continentFor(l.country) === "Europe" && !EUROPE_STRONGEST_EXCLUDE.has(l.country);
+    });
+    const groups = await Promise.all(
+      euIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null))
+    );
+    const leagues = groups.filter((g) => g && g.fixtures && g.fixtures.length);
+
+    const win = [], btts = [], over25 = [], team2plus = [];
+    for (const g of leagues) {
+      const meta = { leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag };
+      for (const fx of g.fixtures) {
+        if (!includeFinished && fx.status === "finished") continue;
+        const m = fx.prediction?.markets;
+        if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+        const odds = await getFixtureOdds(fx.id).catch(() => null); // cached from the day build
+        if (!odds?.best) continue;
+        const home = fx.homeTeam.name, away = fx.awayTeam.name;
+        const base = {
+          ...meta, matchId: fx.id, home, away, kickoff: fx.startTimestamp,
+          homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo,
+        };
+        // Price a selection at real book odds; qualify only at >= 1.50.
+        const price = (marketKey, selection) => {
+          const p = bestBookOddsForLeg(odds.best, { marketKey, selection }, m.winner);
+          return p && p.odds >= STRONGEST_MIN_BOOK ? p : null;
+        };
+        // Grade a pick against the final score (record mode only).
+        const hs = fx.homeScore, as_ = fx.awayScore;
+        const settled = fx.status === "finished" && hs != null && as_ != null;
+        const grade = (cat, side) => {
+          if (!settled) return {};
+          let hit;
+          if (cat === "win") hit = m.winner === "home" ? hs > as_ : as_ > hs;
+          else if (cat === "btts") hit = hs > 0 && as_ > 0;
+          else if (cat === "over25") hit = hs + as_ >= 3;
+          else if (cat === "team2plus") hit = (side === "home" ? hs : as_) >= 2;
+          return { hit: !!hit, homeScore: hs, awayScore: as_ };
+        };
+
+        const fav = m.winner === "home" ? home : away;
+        if (typeof m.win === "number" && m.win >= STRONGEST_MIN_PROB.win) {
+          const p = price("winner", `${fav} to win`);
+          if (p) win.push({ ...base, team: fav, selection: `${fav} to win`, market: "Match Result", probability: Math.round(m.win), odds: p.odds, bookmaker: p.book, ...grade("win") });
+        }
+        if (typeof m.btts === "number" && m.btts >= STRONGEST_MIN_PROB.btts) {
+          const p = price("btts", "Both teams to score");
+          if (p) btts.push({ ...base, selection: "Both teams to score", market: "BTTS", probability: Math.round(m.btts), odds: p.odds, bookmaker: p.book, ...grade("btts") });
+        }
+        if (typeof m.over25 === "number" && m.over25 >= STRONGEST_MIN_PROB.over25) {
+          const p = price("over25", "Over 2.5 goals");
+          if (p) over25.push({ ...base, selection: "Over 2.5 goals", market: "Total Goals", probability: Math.round(m.over25), odds: p.odds, bookmaker: p.book, ...grade("over25") });
+        }
+        const pick = teamGoalPick(m, home, away, 2);
+        if (pick && pick.prob >= STRONGEST_MIN_PROB.team2plus) {
+          const p = price(pick.marketKey, goalSel(pick.team, 2));
+          if (p) team2plus.push({ ...base, team: pick.team, selection: goalSel(pick.team, 2), market: "Team Goals", probability: pick.prob, odds: p.odds, bookmaker: p.book, ...grade("team2plus", pick.side) });
+        }
+      }
+    }
+
+    // Rank each category by model probability (then better price as a tiebreak).
+    const rank = (arr) => arr
+      .sort((a, b) => b.probability - a.probability || a.odds - b.odds)
+      .slice(0, STRONGEST_PER_CATEGORY);
+    const categories = {
+      win: rank(win), btts: rank(btts), over25: rank(over25), team2plus: rank(team2plus),
+    };
+    const result = {
+      date: targetDate,
+      generatedAt: new Date().toISOString(),
+      minOdds: STRONGEST_MIN_BOOK,
+      leaguesScanned: leagues.length,
+      categories,
+    };
+    cacheSet(cacheKey, result, TTL.SLATE); // freeze the day's pool (see cache.js)
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[europe-strongest] ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

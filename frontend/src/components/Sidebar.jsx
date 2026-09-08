@@ -234,34 +234,7 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.itemName}>Props Finder</span>
           </button>
 
-          <button
-            style={{
-              ...styles.todayItem,
-              ...(String(selectedId) === "odds-gen" ? styles.todayItemActive : {}),
-            }}
-            onClick={() => {
-              onSelect("odds-gen");
-              onClose?.();
-            }}
-          >
-            <span style={styles.todayIcon}>🎰</span>
-            <span style={styles.itemName}>Odds Generator</span>
-          </button>
-
-          <button
-            style={{
-              ...styles.todayItem,
-              ...(String(selectedId) === "corner-gen" ? styles.todayItemActive : {}),
-            }}
-            onClick={() => {
-              onSelect("corner-gen");
-              onClose?.();
-            }}
-          >
-            <span style={styles.todayIcon}>⛳</span>
-            <span style={styles.itemName}>Corner Generator</span>
-          </button>
-
+          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -275,19 +248,66 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.todayIcon}>⚡</span>
             <span style={styles.itemName}>Event Generator</span>
           </button>
+          )}
+
+          {localOnly && (
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "corner-gen" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("corner-gen");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>⛳</span>
+            <span style={styles.itemName}>Corner Generator</span>
+          </button>
+          )}
+
+          {localOnly && (
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "odds-gen" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("odds-gen");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🎰</span>
+            <span style={styles.itemName}>Odds Generator</span>
+          </button>
+          )}
 
           <button
             style={{
               ...styles.todayItem,
-              ...(String(selectedId) === "team2plus-scan" ? styles.todayItemActive : {}),
+              ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
-              onSelect("team2plus-scan");
+              onSelect("safebets");
               onClose?.();
             }}
           >
-            <span style={styles.todayIcon}>📊</span>
-            <span style={styles.itemName}>2+ Goals Scan</span>
+            <span style={styles.todayIcon}>🎯</span>
+            <span style={styles.itemName}>Safe Bets</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "europe-strongest" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("europe-strongest");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🌍</span>
+            <span style={styles.itemName}>Europe Strongest Matches</span>
           </button>
 
           <button
@@ -307,46 +327,86 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           <button
             style={{
               ...styles.todayItem,
-              ...(String(selectedId) === "blend-results" ? styles.todayItemActive : {}),
+              ...(String(selectedId) === "blend-england" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
-              onSelect("blend-results");
+              onSelect("blend-england");
               onClose?.();
             }}
           >
-            <span style={styles.todayIcon}>🔀</span>
-            <span style={styles.itemName}>Blend Bets Record</span>
+            <span style={styles.todayIcon}>🏴󠁧󠁢󠁥󠁮󠁧󠁿</span>
+            <span style={styles.itemName}>England Blend Bets</span>
           </button>
 
           <button
             style={{
               ...styles.todayItem,
-              ...(String(selectedId) === "safebets" ? styles.todayItemActive : {}),
+              ...(String(selectedId) === "blend-high" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
-              onSelect("safebets");
+              onSelect("blend-high");
               onClose?.();
             }}
           >
-            <span style={styles.todayIcon}>🎯</span>
-            <span style={styles.itemName}>Safe Bets</span>
+            <span style={styles.todayIcon}>🔥</span>
+            <span style={styles.itemName}>Blend Bets 10–50</span>
           </button>
 
-          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
-              ...(String(selectedId) === "safe-results" ? styles.todayItemActive : {}),
+              ...(String(selectedId) === "blend-england-high" ? styles.todayItemActive : {}),
             }}
             onClick={() => {
-              onSelect("safe-results");
+              onSelect("blend-england-high");
               onClose?.();
             }}
           >
-            <span style={styles.todayIcon}>🧾</span>
-            <span style={styles.itemName}>Safe Bets Record</span>
+            <span style={styles.todayIcon}>🔥</span>
+            <span style={styles.itemName}>England Blend 10–50</span>
           </button>
-          )}
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "team2plus-all" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("team2plus-all");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>⚽</span>
+            <span style={styles.itemName}>Team 2+ Goals</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "team2plus-eng" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("team2plus-eng");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🏴󠁧󠁢󠁥󠁮󠁧󠁿</span>
+            <span style={styles.itemName}>England 2+ Goals</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "team2plus-scan" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("team2plus-scan");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>📊</span>
+            <span style={styles.itemName}>2+ Goals Scan</span>
+          </button>
 
           <button
             style={{
@@ -361,22 +421,6 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.todayIcon}>💎</span>
             <span style={styles.itemName}>VIP Bet</span>
           </button>
-
-          {localOnly && (
-          <button
-            style={{
-              ...styles.todayItem,
-              ...(String(selectedId) === "value" ? styles.todayItemActive : {}),
-            }}
-            onClick={() => {
-              onSelect("value");
-              onClose?.();
-            }}
-          >
-            <span style={styles.todayIcon}>📈</span>
-            <span style={styles.itemName}>Value Bets</span>
-          </button>
-          )}
 
           {localOnly && (
           <button
