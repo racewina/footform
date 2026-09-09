@@ -234,7 +234,6 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.itemName}>Props Finder</span>
           </button>
 
-          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -248,7 +247,6 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.todayIcon}>⚡</span>
             <span style={styles.itemName}>Event Generator</span>
           </button>
-          )}
 
           {localOnly && (
           <button
