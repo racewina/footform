@@ -176,9 +176,38 @@ async function getLeaguePastEvents(leagueId, seasonId) {
 // Build (or rebuild) the league's Elo model from its cached season events. The
 // model holds functions/Maps so it is NEVER cached directly — only the plain
 // events feeding it are. The O(n) replay is cheap.
+// Regression of last season's final ratings toward the league mean when seeding
+// the new season — 0.75 keeps most of a team's established strength while
+// acknowledging squads/managers change over a summer.
+const ELO_SEED_REGRESS = 0.75;
 async function getLeagueElo(leagueId, seasonId) {
   const events = await getLeaguePastEvents(leagueId, seasonId);
-  return buildEloModel(events);
+  // Seed from LAST season's finishing ratings (regressed to the mean) so elite
+  // teams enter the new season strong instead of at the cold 1500 default — this
+  // is the team-quality prior that stops a thin early-season sample flipping a
+  // big team to underdog. Falls back to unseeded if last season isn't available.
+  let seedRatings = null;
+  const prevSeasonId = Number(seasonId) - 1;
+  if (Number.isFinite(prevSeasonId)) {
+    const prevEvents = await getLeaguePastEvents(leagueId, prevSeasonId).catch(() => []);
+    const prevFinished = (prevEvents || []).filter((e) => e.status?.type === "finished").length;
+    if (prevFinished >= 30) {
+      const prevElo = buildEloModel(prevEvents);
+      seedRatings = new Map();
+      for (const [id, r] of prevElo.teams) seedRatings.set(id, 1500 + ELO_SEED_REGRESS * (r - 1500));
+    }
+  }
+  return buildEloModel(events, seedRatings ? { seedRatings } : undefined);
+}
+
+// Sample-size-aware form-vs-Elo blend weight: with few games this season the
+// (seeded) Elo prior is more reliable than thin, noisy form, so we lean on Elo;
+// as games accumulate we trust form more. Returns undefined when Elo is absent,
+// leaving computePrediction on its fixed 0.5 default.
+function sampleAwareFormWeight(elo, homeId, awayId, ts) {
+  if (!elo?.gamesBefore) return undefined;
+  const g = (elo.gamesBefore(homeId, ts) + elo.gamesBefore(awayId, ts)) / 2;
+  return Math.max(0.3, Math.min(0.6, g / (g + 6)));
 }
 
 // The league's own home/away goal baselines (per-league calibration), from its
@@ -519,7 +548,7 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
-    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(fx.startTimestamp));
+    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(fx.startTimestamp), formWeight: sampleAwareFormWeight(elo, fx.homeTeam.id, fx.awayTeam.id, fx.startTimestamp) });
     if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
   }
 
@@ -586,7 +615,7 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
     const grade = prediction.markets
       ? gradeMatch(prediction.markets, homeScore, awayScore)
       : null;
@@ -668,7 +697,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
     if (!prediction.markets) continue;
 
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
@@ -715,7 +744,7 @@ async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, decayFor(e.startTimestamp));
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
     if (!prediction.markets) continue;
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
 

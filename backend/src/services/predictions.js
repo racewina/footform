@@ -298,7 +298,10 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
   // recent form AND season-long strength.
   if (elo && elo.home != null && elo.away != null) {
     const eloLambdas = eloExpectedGoals(elo.home, elo.away, homeBase + awayBase);
-    const w = BLEND_FORM_WEIGHT;
+    // opts.formWeight lets callers vary the form-vs-Elo blend (e.g. a
+    // sample-size-aware weight that leans on Elo early season); default keeps the
+    // fixed 0.5 production behaviour unchanged.
+    const w = clamp(opts.formWeight ?? BLEND_FORM_WEIGHT, 0, 1);
     lambdaHome = w * lambdaHome + (1 - w) * eloLambdas.lambdaHome;
     lambdaAway = w * lambdaAway + (1 - w) * eloLambdas.lambdaAway;
   }

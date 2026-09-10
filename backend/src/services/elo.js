@@ -37,7 +37,13 @@ function expectedScore(ratingA, ratingB) {
 // Replay finished matches oldest-first, updating ratings and recording a
 // pre-match snapshot for each team at each kickoff. Returns helpers to read a
 // team's rating as of any timestamp, plus the final standings.
-export function buildEloModel(matches) {
+// `seedRatings` (teamId -> rating) sets each team's STARTING rating instead of
+// the cold 1500 — pass last season's final ratings (regressed to the mean) so an
+// elite side enters the new season strong and a thin early-season sample can't
+// flip it to an underdog. Teams absent from the seed (e.g. newly promoted) fall
+// back to 1500. Seeds are known before the season starts, so this stays leak-free.
+export function buildEloModel(matches, { seedRatings = null } = {}) {
+  const seedOf = (id) => (seedRatings && seedRatings.has(id) ? seedRatings.get(id) : START);
   const finished = (matches || [])
     .filter(
       (m) =>
@@ -54,7 +60,7 @@ export function buildEloModel(matches) {
   // teamId -> [{ ts, rating }] ascending by ts: rating held going INTO that ts.
   const history = new Map();
 
-  const get = (id) => (ratings.has(id) ? ratings.get(id) : START);
+  const get = (id) => (ratings.has(id) ? ratings.get(id) : seedOf(id));
   const snapshot = (id, ts, rating) => {
     if (!history.has(id)) history.set(id, []);
     history.get(id).push({ ts, rating });
@@ -91,7 +97,7 @@ export function buildEloModel(matches) {
   // match being graded is never included). Binary search the ascending history.
   function ratingBefore(teamId, ts) {
     const hist = history.get(teamId);
-    if (!hist || !hist.length) return START;
+    if (!hist || !hist.length) return seedOf(teamId);
     let lo = 0;
     let hi = hist.length - 1;
     let ans = -1;
@@ -104,12 +110,27 @@ export function buildEloModel(matches) {
         hi = mid - 1;
       }
     }
-    if (ans === -1) return START; // no prior match — league-average default
+    if (ans === -1) return seedOf(teamId); // no prior match — seed (or league avg)
     return hist[ans].rating;
+  }
+
+  // How many matches a team had already played (this season) before `ts` — the
+  // count of pre-match snapshots strictly before it. Drives the sample-size-aware
+  // form/Elo blend: few games → trust the (seeded) Elo prior more than thin form.
+  function gamesBefore(teamId, ts) {
+    const hist = history.get(teamId);
+    if (!hist || !hist.length) return 0;
+    let lo = 0, hi = hist.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (hist[mid].ts < ts) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ans + 1;
   }
 
   return {
     ratingBefore,
+    gamesBefore,
     current: (teamId) => get(teamId),
     teams: ratings,
     matchesUsed: finished.length,
