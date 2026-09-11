@@ -264,7 +264,6 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           </button>
           )}
 
-          {localOnly && (
           <button
             style={{
               ...styles.todayItem,
@@ -278,7 +277,6 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.todayIcon}>🎰</span>
             <span style={styles.itemName}>Odds Generator</span>
           </button>
-          )}
 
           <button
             style={{
