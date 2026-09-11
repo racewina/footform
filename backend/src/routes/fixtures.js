@@ -2093,17 +2093,23 @@ router.get("/team-2plus/scan", async (req, res) => {
   const leagues = ids.map((id) => LEAGUES_BY_ID[id]).filter(Boolean);
   if (!leagues.length) return res.status(400).json({ error: "A valid league id is required." });
   const mode = req.query.mode === "backtest" ? "backtest" : "upcoming";
-  // goals: 1 → "team to score" (1+); 2 → "team to score 2+" (default).
-  const goals = String(req.query.goals) === "1" ? 1 : 2;
+  // market: "1"/"2" = a team to score 1+/2+ (per-team pick, home/away priced
+  // separately); "btts"/"over25" = a MATCH-level market (both teams score / 3+
+  // total goals) with one probability and price per fixture.
+  const marketReq = ["1", "2", "btts", "over25"].includes(String(req.query.goals)) ? String(req.query.goals) : "2";
+  const isTeamMarket = marketReq === "1" || marketReq === "2";
+  const goals = marketReq === "1" ? 1 : 2;
   const hk = goals === 1 ? "home1Plus" : "home2Plus";
   const ak = goals === 1 ? "away1Plus" : "away2Plus";
+  const matchMarketKey = marketReq === "btts" ? "btts" : marketReq === "over25" ? "over25" : null;
+  const matchSel = marketReq === "btts" ? "Both teams to score" : "Over 2.5 goals";
   const lgs = leagues.map((l) => ({ id: l.id, name: l.name, flag: l.flag, country: l.country }));
   const idKey = ids.slice().sort().join(",");
 
   try {
     if (mode === "backtest") {
       const days = Math.min(Math.max(parseInt(req.query.days, 10) || 120, 7), 400);
-      const cacheKey = `t2p-scan-bt:${idKey}:g${goals}:${days}:${tz || "server"}`;
+      const cacheKey = `t2p-scan-bt:${idKey}:m${marketReq}:${days}:${tz || "server"}`;
       const cached = cacheGet(cacheKey);
       if (cached) return res.json({ ...cached, fromCache: true });
 
@@ -2118,28 +2124,43 @@ router.get("/team-2plus/scan", async (req, res) => {
         const w = await buildLeagueResultsWindow(league.id, dateSet, tz).catch(() => null);
         for (const [date, ms] of Object.entries(w?.perDay || {})) {
           for (const m of ms) {
-            const pick = teamGoalPick(m.prediction?.markets, m.homeTeam?.name, m.awayTeam?.name, goals);
-            if (!pick) continue;
-            // Did the PICKED team actually score the target? (the real event, not
-            // the model's yes/no calibration grade — those measure different things).
-            const scored = pick.side === "home" ? m.homeScore : m.awayScore;
-            const hit = typeof scored === "number" && scored >= goals;
-            hits += hit ? 1 : 0; probSum += pick.prob;
-            const mk = m.prediction?.markets || {};
-            rows.push({
-              matchId: m.id, date, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
-              home: m.homeTeam?.name, away: m.awayTeam?.name,
-              homeScore: m.homeScore, awayScore: m.awayScore,
-              team: pick.team, side: pick.side, prob: pick.prob, hit,
-              homeProb: Math.round(mk[hk]), awayProb: Math.round(mk[ak]),
-            });
+            const mk = m.prediction?.markets;
+            if (!mk) continue;
+            if (isTeamMarket) {
+              const pick = teamGoalPick(mk, m.homeTeam?.name, m.awayTeam?.name, goals);
+              if (!pick) continue;
+              // Did the PICKED team actually score the target? (the real event, not
+              // the model's yes/no calibration grade — those measure different things).
+              const scored = pick.side === "home" ? m.homeScore : m.awayScore;
+              const hit = typeof scored === "number" && scored >= goals;
+              hits += hit ? 1 : 0; probSum += pick.prob;
+              rows.push({
+                matchId: m.id, date, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
+                home: m.homeTeam?.name, away: m.awayTeam?.name,
+                homeScore: m.homeScore, awayScore: m.awayScore,
+                team: pick.team, side: pick.side, prob: pick.prob, hit,
+                homeProb: Math.round(mk[hk]), awayProb: Math.round(mk[ak]),
+              });
+            } else {
+              // Match-level market: both teams to score / 3+ total goals.
+              const prob = mk[matchMarketKey];
+              if (typeof prob !== "number" || m.homeScore == null || m.awayScore == null) continue;
+              const hit = matchMarketKey === "btts" ? (m.homeScore > 0 && m.awayScore > 0) : (m.homeScore + m.awayScore >= 3);
+              hits += hit ? 1 : 0; probSum += prob;
+              rows.push({
+                matchId: m.id, date, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
+                home: m.homeTeam?.name, away: m.awayTeam?.name,
+                homeScore: m.homeScore, awayScore: m.awayScore,
+                market: marketReq, selection: matchSel, prob: Math.round(prob), hit,
+              });
+            }
           }
         }
       }
       rows.sort((a, b) => (b.date.localeCompare(a.date)) || ((b.matchId || 0) - (a.matchId || 0)));
       const total = rows.length;
       const result = {
-        mode, leagues: lgs, league: lgs[0], days,
+        mode, market: marketReq, leagues: lgs, league: lgs[0], days,
         summary: { total, hits, hitRate: total ? Math.round(100 * hits / total) : null, avgProb: total ? Math.round(probSum / total) : null },
         rows,
       };
@@ -2150,7 +2171,7 @@ router.get("/team-2plus/scan", async (req, res) => {
     // upcoming
     const targetDate = req.query.date || formatDate(new Date(), tz);
     const within = ["1", "3", "6"].includes(String(req.query.within)) ? String(req.query.within) : "all";
-    const cacheKey = `t2p-scan-up:${idKey}:g${goals}:${targetDate}:${within}:${tz || "server"}`;
+    const cacheKey = `t2p-scan-up:${idKey}:m${marketReq}:${targetDate}:${within}:${tz || "server"}`;
     const cached = cacheGet(cacheKey);
     if (cached) return res.json({ ...cached, fromCache: true });
 
@@ -2176,38 +2197,52 @@ router.get("/team-2plus/scan", async (req, res) => {
       });
       for (const fx of fixtures) {
         const mk = fx.prediction.markets;
-        const pick = teamGoalPick(mk, fx.homeTeam.name, fx.awayTeam.name, goals);
-        if (!pick) continue;
         const odds = await getFixtureOdds(fx.id).catch(() => null);
-        // Price BOTH teams' "to score N+" leg, so each side shows its own strength
-        // and its own book price — not just the model's favourite.
-        const priceSide = (marketKey, teamName) => {
-          const p = odds?.best
-            ? bestBookOddsForLeg(odds.best, { marketKey, selection: goalSel(teamName, goals) }, mk.winner)
-            : null;
-          return { odds: p ? p.odds : null, book: p ? p.book : null };
-        };
-        const homePriced = priceSide(hk, fx.homeTeam.name);
-        const awayPriced = priceSide(ak, fx.awayTeam.name);
-        const pickedPriced = pick.side === "home" ? homePriced : awayPriced;
-        rows.push({
-          matchId: fx.id, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
-          home: fx.homeTeam.name, away: fx.awayTeam.name, status: fx.status,
-          homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo, kickoff: fx.startTimestamp,
-          team: pick.team, side: pick.side, prob: pick.prob,
-          homeProb: Math.round(mk[hk]), awayProb: Math.round(mk[ak]),
-          homeOdds: homePriced.odds, homeBook: homePriced.book,
-          awayOdds: awayPriced.odds, awayBook: awayPriced.book,
-          // picked side kept as bookOdds/bookmaker for back-compat
-          bookOdds: pickedPriced.odds, bookmaker: pickedPriced.book,
-        });
+        if (isTeamMarket) {
+          const pick = teamGoalPick(mk, fx.homeTeam.name, fx.awayTeam.name, goals);
+          if (!pick) continue;
+          // Price BOTH teams' "to score N+" leg, so each side shows its own strength
+          // and its own book price — not just the model's favourite.
+          const priceSide = (marketKey, teamName) => {
+            const p = odds?.best
+              ? bestBookOddsForLeg(odds.best, { marketKey, selection: goalSel(teamName, goals) }, mk.winner)
+              : null;
+            return { odds: p ? p.odds : null, book: p ? p.book : null };
+          };
+          const homePriced = priceSide(hk, fx.homeTeam.name);
+          const awayPriced = priceSide(ak, fx.awayTeam.name);
+          const pickedPriced = pick.side === "home" ? homePriced : awayPriced;
+          rows.push({
+            matchId: fx.id, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
+            home: fx.homeTeam.name, away: fx.awayTeam.name, status: fx.status,
+            homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo, kickoff: fx.startTimestamp,
+            team: pick.team, side: pick.side, prob: pick.prob,
+            homeProb: Math.round(mk[hk]), awayProb: Math.round(mk[ak]),
+            homeOdds: homePriced.odds, homeBook: homePriced.book,
+            awayOdds: awayPriced.odds, awayBook: awayPriced.book,
+            // picked side kept as bookOdds/bookmaker for back-compat
+            bookOdds: pickedPriced.odds, bookmaker: pickedPriced.book,
+          });
+        } else {
+          // Match-level market: one probability + one price per fixture.
+          const prob = mk[matchMarketKey];
+          if (typeof prob !== "number") continue;
+          const p = odds?.best ? bestBookOddsForLeg(odds.best, { marketKey: matchMarketKey, selection: matchSel }, mk.winner) : null;
+          rows.push({
+            matchId: fx.id, leagueId: league.id, leagueName: league.name, leagueFlag: league.flag,
+            home: fx.homeTeam.name, away: fx.awayTeam.name, status: fx.status,
+            homeLogo: fx.homeTeam.logo, awayLogo: fx.awayTeam.logo, kickoff: fx.startTimestamp,
+            market: marketReq, selection: matchSel, prob: Math.round(prob),
+            bookOdds: p ? p.odds : null, bookmaker: p ? p.book : null,
+          });
+        }
       }
     }
     // Not-yet-started fixtures first (still bettable), highest prob on top;
     // already-started ("live") matches sink to the bottom for reference.
     const started = (r) => (r.status === "notstarted" ? 0 : 1);
     rows.sort((a, b) => started(a) - started(b) || b.prob - a.prob);
-    const result = { mode, leagues: lgs, league: lgs[0], date: targetDate, within, count: rows.length, rows };
+    const result = { mode, market: marketReq, leagues: lgs, league: lgs[0], date: targetDate, within, count: rows.length, rows };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     return res.json({ ...result, fromCache: false });
   } catch (err) {

@@ -36,9 +36,9 @@ async function fetchScanLeagues({ dateStr, within, hour }) {
   return res.json();
 }
 
-async function fetchScan({ leagues, mode, dateStr, within, goals }) {
+async function fetchScan({ leagues, mode, dateStr, within, market }) {
   const extra = mode === "upcoming" ? `&date=${dateStr}&within=${within}` : "";
-  const res = await fetch(`/api/team-2plus/scan?leagues=${leagues}&mode=${mode}&goals=${goals}${extra}&tz=${encodeURIComponent(TZ)}`, {
+  const res = await fetch(`/api/team-2plus/scan?leagues=${leagues}&mode=${mode}&goals=${market}${extra}&tz=${encodeURIComponent(TZ)}`, {
     headers: { "x-odds-pass": getToolPass() },
   });
   if (res.status === 401) { clearToolPass(); throw new Error("This tool is private."); }
@@ -76,7 +76,7 @@ export default function Team2PlusScanPage() {
   const [pickerOpen, setPickerOpen] = useState(true);           // whole league panel open?
   const [continent, setContinent] = useState("all");            // continent filter
   const [hourFilter, setHourFilter] = useState("all");          // "all" | 0..23 kickoff-hour bucket
-  const [goals, setGoals] = useState(2);                        // 1 = to score, 2 = 2+ goals
+  const [market, setMarket] = useState("2");                    // "1"|"2" team to score, "btts", "over25"
   const [generated, setGenerated] = useState(null); // { leagues, mode, dateStr, within, goals, key }
 
   const dateStr = ymd(viewDate);
@@ -151,8 +151,8 @@ export default function Team2PlusScanPage() {
     if (!selCount) return;
     const ids = [...selected].join(",");
     setGenerated({
-      leagues: ids, mode, dateStr, within: effWithin, goals,
-      key: `${ids}:${mode}:g${goals}:${mode === "upcoming" ? `${dateStr}:${effWithin}` : "bt"}`,
+      leagues: ids, mode, dateStr, within: effWithin, market,
+      key: `${ids}:${mode}:m${market}:${mode === "upcoming" ? `${dateStr}:${effWithin}` : "bt"}`,
     });
   };
 
@@ -174,7 +174,12 @@ export default function Team2PlusScanPage() {
   const rows = (data?.mode === "upcoming" && hourFilter !== "all")
     ? (data?.rows || []).filter((r) => r.kickoff && new Date(r.kickoff * 1000).getHours() === Number(hourFilter))
     : (data?.rows || []);
-  const gLabel = data?.goals === 1 ? "1+" : "2+"; // label for the generated result
+  // Labels for the generated result's market.
+  const dMarket = data?.market ?? "2";
+  const isTeamMkt = dMarket === "1" || dMarket === "2";
+  const gLabel = dMarket === "1" ? "1+" : "2+";
+  const mktLabel = dMarket === "btts" ? "Both teams to score" : dMarket === "over25" ? "Over 2.5 goals" : `${gLabel} goals`;
+  const mktShort = dMarket === "btts" ? "BTTS" : dMarket === "over25" ? "O2.5" : gLabel;
   const multi = (data?.leagues?.length || 0) > 1;
   const scopeLabel = data
     ? (data.leagues?.length === 1 ? `${data.leagues[0].flag} ${data.leagues[0].name}` : `${data.leagues?.length} leagues`)
@@ -191,23 +196,23 @@ export default function Team2PlusScanPage() {
       <div style={styles.note}>
         <span aria-hidden="true">⚽</span>
         <span>
-          Pick a <strong>Goals</strong> range (1+ or 2+), tick one or more leagues, then
-          <strong> Generate</strong> for each fixture's best "team to score" pick with real bookmaker
-          prices, or <strong>Backtest</strong> to see how the pick has landed across past finished
-          matches. The list only shows leagues with fixtures for the chosen date and
-          <strong> Within</strong> window. Estimates only.
+          Pick a <strong>Market</strong> — a team to score (1+ / 2+), <strong>BTTS</strong> or
+          <strong> Over 2.5</strong> — tick one or more leagues, then <strong>Generate</strong> for
+          each fixture's model probability with real bookmaker prices, or <strong>Backtest</strong> to
+          see how it has landed across past finished matches. The list only shows leagues with
+          fixtures for the chosen date and <strong>Within</strong> window. Estimates only.
         </span>
       </div>
 
       <div style={styles.controls}>
         <label style={styles.fieldNarrow}>
-          <span style={styles.fieldLabel}>Goals</span>
+          <span style={styles.fieldLabel}>Market</span>
           <div style={styles.seg}>
-            {[{ v: 1, l: "1+ Goals" }, { v: 2, l: "2+ Goals" }].map((o) => (
+            {[{ v: "1", l: "1+" }, { v: "2", l: "2+" }, { v: "btts", l: "BTTS" }, { v: "over25", l: "O2.5" }].map((o) => (
               <button
                 key={o.v}
-                style={{ ...styles.segBtn, ...(goals === o.v ? styles.segOn : {}) }}
-                onClick={() => { setGoals(o.v); setGenerated(null); }}
+                style={{ ...styles.segBtn, ...(market === o.v ? styles.segOn : {}) }}
+                onClick={() => { setMarket(o.v); setGenerated(null); }}
               >
                 {o.l}
               </button>
@@ -346,7 +351,7 @@ export default function Team2PlusScanPage() {
                   <Stat label="Picks landed" value={`${data.summary.hits}/${data.summary.total}`} />
                   <Stat label="Avg model prob" value={`${data.summary.avgProb}%`} />
                 </div>
-                <div style={styles.summNote}>How often the model's picked team actually scored {gLabel} goals.</div>
+                <div style={styles.summNote}>How often {isTeamMkt ? `the model's picked team actually scored ${gLabel} goals` : dMarket === "btts" ? "both teams actually scored" : "the match actually had 3+ goals"}.</div>
               </div>
             ) : (
               <p style={styles.empty}>No finished matches with a prediction for the selected leagues in the window.</p>
@@ -359,7 +364,7 @@ export default function Team2PlusScanPage() {
                   {r.home} <b style={styles.score}>{r.homeScore}-{r.awayScore}</b> {r.away}
                 </span>
                 <span style={styles.rowPick}>
-                  <span style={{ ...styles.pickTeam, background: tint(probColor(r.prob)), color: probColor(r.prob) }}>{r.team} {gLabel} · {r.prob}%</span>
+                  <span style={{ ...styles.pickTeam, background: tint(probColor(r.prob)), color: probColor(r.prob) }}>{isTeamMkt ? `${r.team} ${gLabel}` : mktShort} · {r.prob}%</span>
                 </span>
                 <span style={{ ...styles.hitBadge, ...(r.hit ? styles.hitWon : styles.hitLost) }}>{r.hit ? "✓" : "✗"}</span>
               </div>
@@ -372,7 +377,7 @@ export default function Team2PlusScanPage() {
             <p style={styles.empty}>No upcoming fixtures for the selected leagues in this window.</p>
           ) : (
             <>
-              <div style={styles.resultHead}>{scopeLabel} · {rows.length} fixtures — likeliest to score {gLabel}</div>
+              <div style={styles.resultHead}>{scopeLabel} · {rows.length} fixtures — {isTeamMkt ? `likeliest to score ${gLabel}` : `most likely ${mktShort}`}</div>
               {rows.map((r) => {
                 const live = r.status && r.status !== "notstarted";
                 return (
@@ -385,8 +390,14 @@ export default function Team2PlusScanPage() {
                       : <span style={styles.ko}>{koTime(r.kickoff)}</span>}
                   </div>
                   <div style={styles.sides}>
-                    <SideRow name={r.home} prob={r.homeProb} odds={r.homeOdds} book={r.homeBook} picked={r.side === "home"} label={gLabel} />
-                    <SideRow name={r.away} prob={r.awayProb} odds={r.awayOdds} book={r.awayBook} picked={r.side === "away"} label={gLabel} />
+                    {isTeamMkt ? (
+                      <>
+                        <SideRow name={r.home} prob={r.homeProb} odds={r.homeOdds} book={r.homeBook} picked={r.side === "home"} label={gLabel} />
+                        <SideRow name={r.away} prob={r.awayProb} odds={r.awayOdds} book={r.awayBook} picked={r.side === "away"} label={gLabel} />
+                      </>
+                    ) : (
+                      <SideRow name={mktLabel} prob={r.prob} odds={r.bookOdds} book={r.bookmaker} picked label="" />
+                    )}
                   </div>
                 </div>
                 );
@@ -410,7 +421,7 @@ function SideRow({ name, prob, odds, book, picked, label = "2+" }) {
       </span>
       <span style={styles.sideRight}>
         {hasP && (
-          <span style={{ ...styles.sideProb, background: tint(probColor(prob)), color: probColor(prob) }}>{label} {prob}%</span>
+          <span style={{ ...styles.sideProb, background: tint(probColor(prob)), color: probColor(prob) }}>{label ? `${label} ` : ""}{prob}%</span>
         )}
         <span style={styles.sideOdds}>
           {odds != null ? <>@{odds.toFixed(2)} <span style={styles.book}>{book}</span></> : <span style={styles.book}>no price</span>}
