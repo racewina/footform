@@ -112,6 +112,7 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
   const [hourFilter, setHourFilter] = useState("all"); // "all" | 0..23 — kickoff-hour bucket
   const [market, setMarket] = useState("all");
   const [picked, setPicked] = useState([]);     // selected league ids (strings)
+  const [chipsOpen, setChipsOpen] = useState(true); // selected-league chips panel open?
   const [continent, setContinent] = useState("all");
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [generated, setGenerated] = useState(null);
@@ -320,22 +321,31 @@ export default function OddsGeneratorPage({ date, onDateChange, onOpenLeague }) 
 
       {leagues.length > 0 && (
         <div style={styles.pickBar}>
-          <div style={styles.chipsWrap}>
-            {picked.length === 0 && <span style={styles.chipsHint}>No leagues selected — add one above.</span>}
-            {picked.map((id) => {
-              const l = leaguesById.get(String(id));
-              return (
-                <span key={id} style={styles.leagueChip}>
-                  {l ? `${l.flag} ${l.name}` : id}
-                  <button style={styles.chipX} onClick={() => removeLeague(id)} aria-label={`Remove ${l?.name || id}`}>×</button>
-                </span>
-              );
-            })}
+          <div style={styles.pickHeader}>
+            <button style={styles.pickerToggle} onClick={() => setChipsOpen((v) => !v)} aria-expanded={chipsOpen}>
+              <span style={{ ...styles.chev, transform: chipsOpen ? "rotate(90deg)" : "none" }}>›</span>
+              Selected leagues
+              {picked.length ? <span style={styles.selBadge}>{picked.length}</span> : null}
+            </button>
+            <div style={styles.pickActions}>
+              <button style={styles.smallBtn} onClick={addAll}>Add all ({shownLeagues.length})</button>
+              {picked.length > 0 && <button style={styles.smallBtn} onClick={clearAll}>Clear</button>}
+            </div>
           </div>
-          <div style={styles.pickActions}>
-            <button style={styles.smallBtn} onClick={addAll}>Add all ({shownLeagues.length})</button>
-            {picked.length > 0 && <button style={styles.smallBtn} onClick={clearAll}>Clear</button>}
-          </div>
+          {chipsOpen && (
+            <div style={styles.chipsWrap}>
+              {picked.length === 0 && <span style={styles.chipsHint}>No leagues selected — add one above.</span>}
+              {picked.map((id) => {
+                const l = leaguesById.get(String(id));
+                return (
+                  <span key={id} style={styles.leagueChip}>
+                    {l ? `${l.flag} ${l.name}` : id}
+                    <button style={styles.chipX} onClick={() => removeLeague(id)} aria-label={`Remove ${l?.name || id}`}>×</button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -481,8 +491,12 @@ const styles = {
   genBtn: { fontSize: 14, fontWeight: 700, color: "#04121f", background: "var(--accent)", border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer" },
   genBtnOff: { opacity: 0.4, cursor: "not-allowed" },
 
-  pickBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "0 24px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
-  chipsWrap: { display: "flex", gap: 6, flexWrap: "wrap", flex: 1, minWidth: 0 },
+  pickBar: { display: "flex", flexDirection: "column", gap: 8, padding: "0 24px 14px", borderBottom: "1px solid var(--border)" },
+  pickHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
+  pickerToggle: { fontSize: 12, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase", letterSpacing: 0.4, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 },
+  chev: { fontSize: 14, display: "inline-block", transition: "transform .15s" },
+  selBadge: { fontSize: 11, fontWeight: 700, color: "var(--accent)", background: "rgba(46,204,113,0.14)", borderRadius: 20, padding: "2px 9px", textTransform: "none", letterSpacing: 0 },
+  chipsWrap: { display: "flex", gap: 6, flexWrap: "wrap", minWidth: 0 },
   chipsHint: { fontSize: 12, color: "var(--text3)" },
   leagueChip: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600, color: "var(--text)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px 6px 4px 10px" },
   chipX: { fontSize: 15, lineHeight: 1, color: "var(--text3)", background: "transparent", border: "none", cursor: "pointer", padding: "0 2px" },
