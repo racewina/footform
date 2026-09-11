@@ -143,10 +143,14 @@ export function bestInRange(candidates, min, max) {
 // The odds-range ladder the UI offers (0.10-wide buckets). Kept here so the route
 // and any client share one definition.
 export function oddsRangeLadder() {
+  // 0.30-wide buckets, each starting 0.01 above the previous: 1.10-1.40,
+  // 1.41-1.70, 1.71-2.00, … (integer cents to avoid float drift).
   const rungs = [];
-  for (let lo = 1.1; lo < 5.0001; lo += 0.1) {
-    const l = round2(lo);
-    rungs.push({ key: `${l.toFixed(2)}-${round2(l + 0.09).toFixed(2)}`, min: l, max: round2(l + 0.099) });
+  let prevMax = 109;
+  for (let maxC = 140; maxC <= 500; maxC += 30) {
+    const min = (prevMax + 1) / 100, max = maxC / 100;
+    rungs.push({ key: `${min.toFixed(2)}-${max.toFixed(2)}`, min, max });
+    prevMax = maxC;
   }
   return rungs;
 }

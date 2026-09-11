@@ -63,17 +63,20 @@ const MARKETS = [
   { key: "dc", label: "Double chance" },
 ];
 
-// Odds ladder in 0.10-wide buckets (matches the backend). Built from integers to
-// avoid float drift, so buckets are clean and non-overlapping (1.10–1.19, …).
+// Odds ladder in 0.30-wide buckets (matches the backend). Built from integer
+// cents to avoid float drift; each bucket starts 0.01 above the previous one so
+// they're clean and non-overlapping (1.10–1.40, 1.41–1.70, 1.71–2.00, …).
 const RANGES = (() => {
   const out = [];
-  for (let lo = 110; lo <= 500; lo += 10) {
-    const min = lo / 100, max = (lo + 9) / 100;
+  let prevMax = 109; // cents; first bucket's min = 1.10
+  for (let maxC = 140; maxC <= 500; maxC += 30) {
+    const min = (prevMax + 1) / 100, max = maxC / 100;
     out.push({ key: `${min.toFixed(2)}-${max.toFixed(2)}`, min, max, label: `${min.toFixed(2)} – ${max.toFixed(2)}` });
+    prevMax = maxC;
   }
   return out;
 })();
-const DEFAULT_RANGE = "1.30-1.39";
+const DEFAULT_RANGE = "1.10-1.40";
 
 function koTime(ts) {
   if (!ts) return "";
