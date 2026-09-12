@@ -37,6 +37,7 @@ import { settleSlips, settleSingles, dayProfit } from "../services/roi.js";
 import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { oddsCandidates, bestInRange, oddsRangeLadder, filterByMarket } from "../services/oddsGenerator.js";
 import { buildEloModel } from "../services/elo.js";
+import { loadSnapshot, saveSnapshot } from "../services/snapshot.js";
 import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, continentFor } from "../data/leagues.js";
 import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
@@ -465,6 +466,36 @@ function formatDate(d, tz) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Per-league-day persisted snapshot. The in-memory cache dies with the
+// serverless instance, so on a busy day a cold /today used to rebuild EVERY
+// league from scratch and overrun the function timeout — returning nothing, and
+// (since only completed builds are saved) leaving nothing behind, so the next
+// open restarted the same doomed build and could hang indefinitely. Persisting
+// each league as it finishes means progress is never wasted: a later request
+// loads the done leagues from the store instantly and only builds what's still
+// missing, so a heavy day CONVERGES across a couple of quick reloads. TTL matches
+// the aggregate snapshot (live scores are overlaid client-side, so a few hours
+// of prediction staleness is fine).
+const LEAGUE_DAY_SNAP_TTL = 3 * 60 * 60;
+const leagueDaySnapKey = (leagueId, date, tz) => `snap:leagueday:${leagueId}:${date}:${tz || "server"}`;
+
+// A league-day from the in-memory cache or the persisted store WITHOUT building
+// it (no upstream calls, so it can't stall). Used past the /today build budget so
+// a response can still include leagues an earlier request already finished,
+// without ever starting another cold rebuild. Null when neither has it yet.
+async function peekLeagueDay(leagueId, targetDate, tz) {
+  if (!LEAGUES_BY_ID[leagueId]) return null;
+  const cacheKey = `fixtures:${leagueId}:${targetDate}:${tz || "server"}`;
+  const mem = cacheGet(cacheKey);
+  if (mem) return { ...mem, fromCache: true };
+  const snap = await loadSnapshot(leagueDaySnapKey(leagueId, targetDate, tz)).catch(() => null);
+  if (snap) {
+    cacheSet(cacheKey, snap, TTL.FIXTURES);
+    return { ...snap, fromSnapshot: true };
+  }
+  return null;
+}
+
 // Build one league's fixtures (with form-based predictions) for a single day.
 // Shared by /fixtures/:leagueId and the cross-league /today aggregation, with
 // a per-league-per-day cache so /today reuses anything already fetched.
@@ -475,6 +506,15 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
   const cacheKey = `fixtures:${leagueId}:${targetDate}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return { ...cached, fromCache: true };
+
+  // Survive cold starts: a league already built (by an earlier request or the
+  // warm cron) is read back from the persisted store instead of rebuilt. No-ops
+  // instantly when the store isn't configured.
+  const snap = await loadSnapshot(leagueDaySnapKey(leagueId, targetDate, tz)).catch(() => null);
+  if (snap) {
+    cacheSet(cacheKey, snap, TTL.FIXTURES);
+    return { ...snap, fromSnapshot: true };
+  }
 
   const season = await getCurrentSeason(leagueId);
   if (!season) return { league, date: targetDate, season: null, fixtures: [], fromCache: false };
@@ -554,6 +594,9 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
 
   const result = { league, date: targetDate, season: season.name, fixtures };
   cacheSet(cacheKey, result, TTL.FIXTURES);
+  // Persist so the next cold request skips this league's rebuild. Fire-and-forget
+  // — a store failure must never fail the build.
+  saveSnapshot(leagueDaySnapKey(leagueId, targetDate, tz), result, LEAGUE_DAY_SNAP_TTL).catch(() => {});
   return { ...result, fromCache: false };
 }
 
@@ -1053,16 +1096,49 @@ router.get("/today", async (req, res) => {
           active.add(id);
         }
       }
-      leaguesToBuild = LEAGUES.filter((l) => active.has(String(l.id)));
+      // Biggest slates first, so a budget-limited build spends its time on the
+      // leagues most likely to matter and any partial slate leads with them.
+      const countByLeague = new Map();
+      for (const f of probes.flatMap((pr) => pr.r)) {
+        const id = String(f.leagueId);
+        if (active.has(id) && f.startTimestamp) countByLeague.set(id, (countByLeague.get(id) || 0) + 1);
+      }
+      leaguesToBuild = LEAGUES.filter((l) => active.has(String(l.id)))
+        .sort((a, b) => (countByLeague.get(String(b.id)) || 0) - (countByLeague.get(String(a.id)) || 0));
     }
 
-    const groups = await Promise.all(
-      leaguesToBuild.map((l) =>
-        buildLeagueDayAny(l.id, targetDate, tz).catch((e) => {
+    // Progressive, time-budgeted build. On the busiest days the full cross-league
+    // build overruns the function limit; rather than time out and return nothing,
+    // build within a budget and return whatever's ready. Each league persists as
+    // it lands (buildLeagueDay saves to the store), so leagues not reached this
+    // time are served instantly once a follow-up request builds them — the day
+    // fills in across a reload or two instead of hanging. Anything still missing
+    // is reported as `pending` so the client can auto-refetch until complete.
+    const BUILD_BUDGET_MS = Number(process.env.TODAY_BUILD_BUDGET_MS || 45000);
+    const CONCURRENCY = 4;
+    const deadline = Date.now() + BUILD_BUDGET_MS;
+    const groups = [];
+    let pending = 0;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < leaguesToBuild.length) {
+        const l = leaguesToBuild[cursor++];
+        try {
+          // Within budget: build (or load) the league. Past it: only take the
+          // league if it's already cached/persisted — never start a cold rebuild.
+          const g = Date.now() < deadline
+            ? await buildLeagueDayAny(l.id, targetDate, tz)
+            : await peekLeagueDay(l.id, targetDate, tz);
+          if (g) groups.push(g);
+          else pending++; // not built yet and not in the store → still pending
+        } catch (e) {
           console.error(`[today] ${l.id}: ${e.message}`);
-          return null;
-        })
-      )
+          pending++;
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, leaguesToBuild.length || 1) }, worker)
     );
 
     const leagues = groups
@@ -1071,8 +1147,12 @@ router.get("/today", async (req, res) => {
       .sort((a, b) => b.fixtures.length - a.fixtures.length);
 
     const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
-    const result = { date: targetDate, totalMatches, leagues };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
+    const partial = pending > 0;
+    const result = { date: targetDate, totalMatches, leagues, partial, pending };
+    // Only a COMPLETE slate is worth caching as the authoritative today view; a
+    // partial one must not mask the leagues still filling in (the snapshot/edge
+    // layers in app.js likewise skip persisting partials).
+    if (!partial) cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[today] ${err.message}`);
