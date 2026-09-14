@@ -142,6 +142,12 @@ export const LEAGUES_BY_ID = Object.fromEntries(
 // division is covered.
 export const NO_BET_COUNTRIES = new Set(["Iceland", "Finland", "Estonia"]);
 
+// Specific league IDs barred from the auto-selected slips (finer-grained than
+// NO_BET_COUNTRIES — bars one division, not a whole country). They still appear
+// in Today's Matches, league views and the manual generators.
+//   104 = Norway 1. Division (2nd tier; Eliteserien 103 stays eligible).
+export const NO_BET_LEAGUES = new Set(["104"]);
+
 // Country → continent, for the scan/corner league filters' continent grouping.
 // The pseudo-countries (Europe, South America, International) map to themselves.
 export const COUNTRY_CONTINENT = {

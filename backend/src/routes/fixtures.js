@@ -38,7 +38,7 @@ import { buildValueBets, bestBookOddsForLeg } from "../services/valuebets.js";
 import { oddsCandidates, bestInRange, oddsRangeLadder, filterByMarket } from "../services/oddsGenerator.js";
 import { buildEloModel } from "../services/elo.js";
 import { loadSnapshot, saveSnapshot } from "../services/snapshot.js";
-import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, continentFor } from "../data/leagues.js";
+import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, NO_BET_LEAGUES, continentFor } from "../data/leagues.js";
 import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
 const router = express.Router();
@@ -2350,7 +2350,7 @@ async function buildBlendPool(leagues, { includeFinished = false } = {}) {
   const ranked = [];
   for (const g of leagues) {
     if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
-    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
+    if (NO_BET_COUNTRIES.has(g.league?.country) || NO_BET_LEAGUES.has(String(g.league?.id))) continue; // excluded from bet selections
     for (const fx of g.fixtures) {
       if (!fx.homeTeam?.id || !fx.awayTeam?.id) continue;
       if (!includeFinished && fx.status === "finished") continue;
@@ -2405,7 +2405,7 @@ async function buildTeam2PlusPool(leagues, { includeFinished = false } = {}) {
   const ranked = [];
   for (const g of leagues) {
     if (g.league?.friendly) continue; // friendlies are too unpredictable to stake
-    if (NO_BET_COUNTRIES.has(g.league?.country)) continue; // excluded from bet selections
+    if (NO_BET_COUNTRIES.has(g.league?.country) || NO_BET_LEAGUES.has(String(g.league?.id))) continue; // excluded from bet selections
     for (const fx of g.fixtures) {
       if (!fx.homeTeam?.id || !fx.awayTeam?.id || !fx.prediction?.markets) continue;
       if (!includeFinished && fx.status === "finished") continue;
@@ -2712,7 +2712,7 @@ router.get("/europe-strongest", async (req, res) => {
     const ids = await leaguesPlayedOn(targetDate, tz, includeFinished ? undefined : "notstarted");
     const euIds = ids.filter((id) => {
       const l = LEAGUES_BY_ID[id];
-      return l && !l.friendly && continentFor(l.country) === "Europe" && !EUROPE_STRONGEST_EXCLUDE.has(l.country);
+      return l && !l.friendly && continentFor(l.country) === "Europe" && !EUROPE_STRONGEST_EXCLUDE.has(l.country) && !NO_BET_LEAGUES.has(String(id));
     });
     const groups = await Promise.all(
       euIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null))

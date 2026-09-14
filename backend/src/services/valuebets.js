@@ -1,3 +1,5 @@
+import { NO_BET_LEAGUES } from "../data/leagues.js";
+
 // Value bets — where our model thinks an outcome is MORE likely than the
 // bookmaker's best price implies.
 //
@@ -118,6 +120,7 @@ export function bestBookOddsForLeg(best, leg, winnerSide) {
 export function buildValueBets(leagues, oddsMap = {}) {
   const all = [];
   for (const g of leagues || []) {
+    if (NO_BET_LEAGUES.has(String(g.league?.id))) continue; // excluded from bet selections
     for (const fx of g.fixtures || []) {
       const withLeague = { ...fx, _league: g.league };
       all.push(...fixtureValueBets(withLeague, oddsMap[fx.id]));
