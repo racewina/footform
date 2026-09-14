@@ -38,7 +38,7 @@ const BUILDER_MAX = 8; // up to this many matches listed as builders
 // Per-pick floors: a pick must be at least this likely to make the menu. The
 // default set is tuned to European football; regions with a different scoring
 // profile get their own (see SA_FLOOR).
-const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2: 52, corner3: 40 };
+const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2: 52, corner3: 40, dc: 66 };
 
 // South American calibration. CONMEBOL football is lower-scoring and more
 // draw-prone than Europe but with a markedly stronger home advantage, so the
@@ -48,7 +48,7 @@ const FLOOR = { win: 50, score1: 65, twoPlus: 50, over25: 52, btts: 55, corner2:
 // result/home-scoring markets (lower win + score1 floors) and demands more of
 // the goals markets (higher over25/btts/twoPlus floors) so the section surfaces
 // the picks the SA game state actually supports, not speculative goal legs.
-export const SA_FLOOR = { win: 47, score1: 60, twoPlus: 54, over25: 56, btts: 59, corner2: 52, corner3: 40 };
+export const SA_FLOOR = { win: 47, score1: 60, twoPlus: 54, over25: 56, btts: 59, corner2: 52, corner3: 40, dc: 64 };
 
 // Every configured South American competition, derived from the league table by
 // country so it tracks additions automatically. Covers the domestic pyramids
@@ -103,8 +103,12 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
   const c = corner?.prediction || corner;
   const cTeam = c ? (homeFav ? c.home : c.away) : null;
 
+  const favDcKey = homeFav ? "dc1x" : "dcx2";
+  const favDcProb = homeFav ? m.dc1x : m.dcx2;
   const cands = [
     { ok: favWin >= floors.win, marketKey: "winner", market: "Match Result", selection: `${favTeam} to win`, prob: favWin },
+    { ok: favDcProb >= floors.dc, marketKey: favDcKey, market: "Double Chance", selection: `${favTeam} or draw`, prob: favDcProb },
+    { ok: m.dc12 >= floors.dc, marketKey: "dc12", market: "Double Chance", selection: `${home} or ${away}`, prob: m.dc12 },
     { ok: m.home1Plus >= floors.score1, marketKey: "home1Plus", market: "Team Goals", selection: `${home} to score`, prob: m.home1Plus },
     { ok: m.away1Plus >= floors.score1, marketKey: "away1Plus", market: "Team Goals", selection: `${away} to score`, prob: m.away1Plus },
     { ok: m.home2Plus >= floors.twoPlus, marketKey: "home2Plus", market: "Team Goals", selection: `${home} 2+ goals`, prob: m.home2Plus },
@@ -114,10 +118,19 @@ function matchBuilder(fx, g, corner, floors = FLOOR) {
     cTeam && { ok: cTeam.fh2Plus >= floors.corner2, marketKey: homeFav ? "cornerHomeFh2" : "cornerAwayFh2", market: "1H Corners", selection: `${favTeam} 2+ corners (1st half)`, prob: cTeam.fh2Plus },
   ].filter((x) => x && x.ok && typeof x.prob === "number");
 
+  // The result markets (straight win + double chance) all overlap, so keep only
+  // the single strongest — otherwise the combined price double-counts the same
+  // outcome. Double chance is higher-prob than the win, so it usually takes the
+  // slot (a safer result leg).
+  const RESULT_KEYS = new Set(["winner", "dc1x", "dc12", "dcx2"]);
+  const resultCands = cands.filter((c) => RESULT_KEYS.has(c.marketKey)).sort((a, b) => b.prob - a.prob);
+  const dropResult = new Set(resultCands.slice(1).map((c) => c.marketKey));
+  const deduped = cands.filter((c) => !dropResult.has(c.marketKey));
+
   // Drop picks logically implied by others (e.g. BTTS when both teams are already
   // backed to score), so overlapping markets aren't priced twice in the product.
-  const keep = priceableKeys(cands.map((c) => c.marketKey));
-  const picks = cands.filter((c) => keep.has(c.marketKey));
+  const keep = priceableKeys(deduped.map((c) => c.marketKey));
+  const picks = deduped.filter((c) => keep.has(c.marketKey));
 
   if (picks.length < 2) return null;
 

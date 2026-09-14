@@ -2691,7 +2691,7 @@ router.get("/vip/results", async (req, res) => {
 // user sees the same list all day and changing odds never swap a pick out.
 const EUROPE_STRONGEST_EXCLUDE = new Set(["Netherlands", "Finland", "Estonia", "Iceland"]);
 const STRONGEST_MIN_BOOK = 1.5;   // the selection's own displayed book odds floor
-const STRONGEST_MIN_PROB = { win: 55, btts: 55, over25: 55, team2plus: 55 };
+const STRONGEST_MIN_PROB = { win: 55, btts: 55, over25: 55, team2plus: 55, dc: 65 };
 const STRONGEST_PER_CATEGORY = 15;
 
 router.get("/europe-strongest", async (req, res) => {
@@ -2719,7 +2719,7 @@ router.get("/europe-strongest", async (req, res) => {
     );
     const leagues = groups.filter((g) => g && g.fixtures && g.fixtures.length);
 
-    const win = [], btts = [], over25 = [], team2plus = [];
+    const win = [], btts = [], over25 = [], team2plus = [], dc = [];
     for (const g of leagues) {
       const meta = { leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag };
       for (const fx of g.fixtures) {
@@ -2748,10 +2748,13 @@ router.get("/europe-strongest", async (req, res) => {
           else if (cat === "btts") hit = hs > 0 && as_ > 0;
           else if (cat === "over25") hit = hs + as_ >= 3;
           else if (cat === "team2plus") hit = (side === "home" ? hs : as_) >= 2;
+          else if (cat === "dc") hit = m.winner === "home" ? hs >= as_ : as_ >= hs; // fav or draw
           return { hit: !!hit, homeScore: hs, awayScore: as_ };
         };
 
         const fav = m.winner === "home" ? home : away;
+        const favDcKey = m.winner === "home" ? "dc1x" : "dcx2";
+        const favDcProb = m.winner === "home" ? m.dc1x : m.dcx2;
         if (typeof m.win === "number" && m.win >= STRONGEST_MIN_PROB.win) {
           const p = price("winner", `${fav} to win`);
           if (p) win.push({ ...base, team: fav, selection: `${fav} to win`, market: "Match Result", probability: Math.round(m.win), odds: p.odds, bookmaker: p.book, ...grade("win") });
@@ -2769,6 +2772,10 @@ router.get("/europe-strongest", async (req, res) => {
           const p = price(pick.marketKey, goalSel(pick.team, 2));
           if (p) team2plus.push({ ...base, team: pick.team, selection: goalSel(pick.team, 2), market: "Team Goals", probability: pick.prob, odds: p.odds, bookmaker: p.book, ...grade("team2plus", pick.side) });
         }
+        if (typeof favDcProb === "number" && favDcProb >= STRONGEST_MIN_PROB.dc) {
+          const p = price(favDcKey, `${fav} or draw`);
+          if (p) dc.push({ ...base, team: fav, selection: `${fav} or draw`, market: "Double Chance", probability: Math.round(favDcProb), odds: p.odds, bookmaker: p.book, ...grade("dc") });
+        }
       }
     }
 
@@ -2777,7 +2784,7 @@ router.get("/europe-strongest", async (req, res) => {
       .sort((a, b) => b.probability - a.probability || a.odds - b.odds)
       .slice(0, STRONGEST_PER_CATEGORY);
     const categories = {
-      win: rank(win), btts: rank(btts), over25: rank(over25), team2plus: rank(team2plus),
+      win: rank(win), btts: rank(btts), over25: rank(over25), team2plus: rank(team2plus), dc: rank(dc),
     };
     const result = {
       date: targetDate,

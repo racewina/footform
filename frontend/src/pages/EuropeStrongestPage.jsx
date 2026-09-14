@@ -21,6 +21,7 @@ const CATEGORIES = [
   { key: "btts", icon: "⚽", title: "Likely BTTS", sub: "Both teams to score" },
   { key: "over25", icon: "🎯", title: "Over 2.5 Goals", sub: "3+ total goals" },
   { key: "team2plus", icon: "🥅", title: "Team to Score 2+", sub: "A side to bag two" },
+  { key: "dc", icon: "🛡️", title: "Double Chance", sub: "Favourite or draw" },
 ];
 
 function kickoffLabel(ts) {

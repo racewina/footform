@@ -39,6 +39,9 @@ function candidates(fx) {
     { market: "Total Goals", selection: "Under 2.5 goals", oddsKey: "under25", prob: 100 - m.over25 },
     { market: "BTTS", selection: "Both teams to score", oddsKey: "bttsYes", prob: m.btts },
     { market: "BTTS", selection: "Both teams NOT to score", oddsKey: "bttsNo", prob: 100 - m.btts },
+    { market: "Double Chance", selection: `${home} or draw`, oddsKey: "dc1x", prob: m.dc1x },
+    { market: "Double Chance", selection: `${home} or ${away}`, oddsKey: "dc12", prob: m.dc12 },
+    { market: "Double Chance", selection: `Draw or ${away}`, oddsKey: "dcx2", prob: m.dcx2 },
   ].filter((c) => typeof c.prob === "number" && c.prob > 0 && c.prob < 100);
 }
 
@@ -107,6 +110,9 @@ export function bestBookOddsForLeg(best, leg, winnerSide) {
     case "btts":
       key = sel.includes("not to score") ? "bttsNo" : "bttsYes";
       break;
+    case "dc1x": key = "dc1x"; break; // home or draw
+    case "dc12": key = "dc12"; break; // home or away
+    case "dcx2": key = "dcx2"; break; // draw or away
     default:
       return null; // corner legs etc. — no matching market in the feed
   }

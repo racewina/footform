@@ -188,6 +188,12 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
       over25: pct(over25),
       over35: pct(over35),
       btts: pct(btts),
+      // Per-side win probs and the three double chances (read off the same grid).
+      homeWin: Math.round(homePct * 100),
+      awayWin: Math.round(awayPct * 100),
+      dc1x: pct(homeWin + draw), // home or draw
+      dc12: pct(homeWin + awayWin), // home or away (no draw)
+      dcx2: pct(draw + awayWin), // draw or away
       expectedGoals: +(lambdaHome + lambdaAway).toFixed(2),
       // Per-side expected goals (the Poisson means). Used by the Event Generator
       // to make player shot volumes and GK saves opponent-aware: a side expected

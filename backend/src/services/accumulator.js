@@ -39,6 +39,10 @@ function fixtureCandidates(fx) {
     { marketKey: "away2Plus", market: "Team Goals", ...sided(m.away2Plus, `${away} 2+ goals`, `${away} under 2 goals`) },
     { marketKey: "over25", market: "Total Goals", ...sided(m.over25, "Over 2.5 goals", "Under 2.5 goals") },
     { marketKey: "btts", market: "BTTS", ...sided(m.btts, "Both teams to score", "Both teams not to score") },
+    // Double chance — a two-way result cover; positive-only (you back the cover).
+    { marketKey: "dc1x", market: "Double Chance", selection: `${home} or draw`, prob: m.dc1x },
+    { marketKey: "dc12", market: "Double Chance", selection: `${home} or ${away}`, prob: m.dc12 },
+    { marketKey: "dcx2", market: "Double Chance", selection: `Draw or ${away}`, prob: m.dcx2 },
   ];
   // Exclude selections shorter than the odds floor (too-safe legs add risk
   // without meaningful odds); a fixture with no eligible market drops out.

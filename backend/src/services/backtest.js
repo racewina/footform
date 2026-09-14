@@ -44,6 +44,12 @@ export function gradeMatch(markets, homeScore, awayScore) {
     away2Plus: { pct: markets.away2Plus, ...yesNo(markets.away2Plus, awayScore >= 2) },
     over25: { pct: markets.over25, ...yesNo(markets.over25, over25Actual) },
     btts: { pct: markets.btts, ...yesNo(markets.btts, bttsActual) },
+    // Double chance (always a "Yes" call — you back the two-way cover). Graded so
+    // slips with a DC leg settle; deliberately NOT in GRADED_MARKETS so the Track
+    // Record's headline accuracy isn't inflated by these easy-to-hit markets.
+    dc1x: { pct: markets.dc1x, call: "Yes", actual: winner !== "away" ? "Yes" : "No", hit: winner !== "away" },
+    dc12: { pct: markets.dc12, call: "Yes", actual: winner !== "draw" ? "Yes" : "No", hit: winner !== "draw" },
+    dcx2: { pct: markets.dcx2, call: "Yes", actual: winner !== "home" ? "Yes" : "No", hit: winner !== "home" },
   };
 
   const keys = Object.keys(grades);
