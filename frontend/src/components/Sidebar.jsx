@@ -204,6 +204,20 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
             <span style={styles.itemName}>Today's Matches</span>
           </button>
 
+          <button
+            style={{
+              ...styles.todayItem,
+              ...(String(selectedId) === "ask" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("ask");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>💬</span>
+            <span style={styles.itemName}>Ask FootForm</span>
+          </button>
+
           {localOnly && (
           <button
             style={{

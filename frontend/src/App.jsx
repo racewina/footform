@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Analytics } from "@vercel/analytics/react";
 import Sidebar from "./components/Sidebar";
 import FixturesPage from "./pages/FixturesPage";
+import AskPage from "./pages/AskPage";
 import ResultsPage from "./pages/ResultsPage";
 import SafeBetsPage from "./pages/SafeBetsPage";
 import VipBetPage from "./pages/VipBetPage";
@@ -148,6 +149,8 @@ export default function App() {
           <PullToRefresh onRefresh={handleRefresh}>
           {selectedLeague === "results"
             ? <ResultsPage />
+            : selectedLeague === "ask"
+              ? <AskPage />
             : selectedLeague === "props-finder"
               ? <PropsFinderPage />
             : selectedLeague === "odds-gen"
@@ -194,6 +197,7 @@ export default function App() {
 
 const LEAGUE_NAMES = {
   "today": { name: "Today's Matches", flag: "📅" },
+  "ask": { name: "Ask FootForm", flag: "💬" },
   "results": { name: "Track Record", flag: "📊" },
   "safebets": { name: "Safe Bets", flag: "🎯" },
   "vip": { name: "VIP Bet", flag: "💎" },
