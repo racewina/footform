@@ -2843,23 +2843,29 @@ router.get("/ask", async (req, res) => {
   const todayDow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun … 6=Sat
   const DOW = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
 
-  // Resolve the parser's day token into concrete date(s) + a friendly label.
-  // A weekday name → its next upcoming occurrence (today if it's that day).
-  // "weekend" → the upcoming Sat+Sun (just Sunday if today is already Sunday).
-  let targetDates, dateLabel;
-  if (params.date === "tomorrow") { targetDates = [shiftN(today, 1)]; dateLabel = "tomorrow"; }
-  else if (params.date === "weekend") {
-    if (todayDow === 0) targetDates = [today];                       // Sunday: the weekend is today
-    else if (todayDow === 6) targetDates = [today, shiftN(today, 1)]; // Saturday + Sunday
-    else { const sat = shiftN(today, 6 - todayDow); targetDates = [sat, shiftN(sat, 1)]; }
-    dateLabel = "this weekend";
-  }
-  else if (params.date in DOW) {
-    const delta = (DOW[params.date] - todayDow + 7) % 7;             // 0 = today
-    targetDates = [shiftN(today, delta)];
-    dateLabel = delta === 0 ? "today" : params.date.charAt(0).toUpperCase() + params.date.slice(1);
-  }
-  else { targetDates = [today]; dateLabel = "today"; }
+  // Resolve ONE day token → { dates:[…], label }. A weekday name → its next
+  // upcoming occurrence (today if it's that day). "weekend" → the upcoming
+  // Sat+Sun (just Sunday if today is already Sunday).
+  const resolveDay = (tok) => {
+    if (tok === "tomorrow") return { dates: [shiftN(today, 1)], label: "tomorrow" };
+    if (tok === "weekend") {
+      if (todayDow === 0) return { dates: [today], label: "this weekend" };
+      if (todayDow === 6) return { dates: [today, shiftN(today, 1)], label: "this weekend" };
+      const sat = shiftN(today, 6 - todayDow);
+      return { dates: [sat, shiftN(sat, 1)], label: "this weekend" };
+    }
+    if (tok in DOW) {
+      const delta = (DOW[tok] - todayDow + 7) % 7; // 0 = today
+      return { dates: [shiftN(today, delta)], label: tok.charAt(0).toUpperCase() + tok.slice(1) };
+    }
+    return { dates: [today], label: "today" };
+  };
+
+  // Union every requested day, dedup + sort dates, join the labels.
+  const dayTokens = Array.isArray(params.days) && params.days.length ? params.days : [params.date || "today"];
+  const resolved = dayTokens.map(resolveDay);
+  const targetDates = [...new Set(resolved.flatMap((r) => r.dates))].sort();
+  const dateLabel = [...new Set(resolved.map((r) => r.label))].join(" & ");
 
   try {
     const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;

@@ -146,16 +146,19 @@ export function parseQuery(raw, leagues = []) {
   const win = q.match(/(?:next|within|in the next)\s*(\d)\s*h(?:ours?|rs?)?/);
   if (win && ["1", "3", "6"].includes(win[1])) within = win[1];
   else if (hasPhrase(q, "soon") || hasPhrase(q, "kicking off")) within = "3";
-  // Day the query is about. A token the /ask route resolves to concrete date(s)
-  // using the caller's timezone: "today" | "tomorrow" | "weekend" | a weekday
-  // name ("saturday"…). Weekday/weekend win over the "today" default; explicit
-  // "today"/"tonight" wins over a bare weekday if both appear.
+  // Day(s) the query is about — a LIST of tokens the /ask route resolves to
+  // concrete date(s) in the caller's timezone and unions: "today" | "tomorrow" |
+  // "weekend" | weekday names. Every one mentioned counts, so "Friday and
+  // Saturday" scans both days. Empty → today.
   const DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  let date = "today";
-  if (hasPhrase(q, "tomorrow")) date = "tomorrow";
-  else if (hasPhrase(q, "today") || hasPhrase(q, "tonight")) date = "today";
-  else if (hasPhrase(q, "weekend")) date = "weekend";
-  else { const d = DAY_NAMES.find((day) => hasPhrase(q, day)); if (d) date = d; }
+  const days = [];
+  if (hasPhrase(q, "today") || hasPhrase(q, "tonight")) days.push("today");
+  if (hasPhrase(q, "tomorrow")) days.push("tomorrow");
+  if (hasPhrase(q, "weekend")) days.push("weekend");
+  for (const day of DAY_NAMES) if (hasPhrase(q, day)) days.push(day);
+  const uniqDays = [...new Set(days)];
+  if (!uniqDays.length) uniqDays.push("today");
+  const date = uniqDays[0]; // back-compat: primary day
 
-  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date };
+  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays };
 }
