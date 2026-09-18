@@ -2811,6 +2811,9 @@ function evalChatMarket(key, m, home, away) {
     case "over25": return num(m.over25) ? { prob: m.over25, selection: "Over 2.5 goals", marketKey: "over25" } : null;
     case "over15": return num(m.over15) ? { prob: m.over15, selection: "Over 1.5 goals", marketKey: null } : null;
     case "over35": return num(m.over35) ? { prob: m.over35, selection: "Over 3.5 goals", marketKey: null } : null;
+    case "under25": return num(m.over25) ? { prob: 100 - m.over25, selection: "Under 2.5 goals", marketKey: "over25" } : null;
+    case "under15": return num(m.over15) ? { prob: 100 - m.over15, selection: "Under 1.5 goals", marketKey: null } : null;
+    case "under35": return num(m.over35) ? { prob: 100 - m.over35, selection: "Under 3.5 goals", marketKey: null } : null;
     case "btts": return num(m.btts) ? { prob: m.btts, selection: "Both teams to score", marketKey: "btts" } : null;
     case "win": { const fav = m.winner === "home" ? home : away; return num(m.win) ? { prob: m.win, selection: `${fav} to win`, marketKey: "winner", team: fav } : null; }
     case "dc": { const k = m.winner === "home" ? "dc1x" : "dcx2"; const p = m.winner === "home" ? m.dc1x : m.dcx2; const fav = m.winner === "home" ? home : away; return num(p) ? { prob: p, selection: `${fav} or draw`, marketKey: k, team: fav } : null; }
@@ -2835,66 +2838,93 @@ router.get("/ask", async (req, res) => {
     return res.json({ query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." });
   }
 
-  const shift1 = (ymd) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + 1); return dt.toISOString().slice(0, 10); };
+  const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
   const today = formatDate(new Date(), tz);
-  const targetDate = params.date === "tomorrow" ? shift1(today) : today;
+  const todayDow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun … 6=Sat
+  const DOW = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+
+  // Resolve the parser's day token into concrete date(s) + a friendly label.
+  // A weekday name → its next upcoming occurrence (today if it's that day).
+  // "weekend" → the upcoming Sat+Sun (just Sunday if today is already Sunday).
+  let targetDates, dateLabel;
+  if (params.date === "tomorrow") { targetDates = [shiftN(today, 1)]; dateLabel = "tomorrow"; }
+  else if (params.date === "weekend") {
+    if (todayDow === 0) targetDates = [today];                       // Sunday: the weekend is today
+    else if (todayDow === 6) targetDates = [today, shiftN(today, 1)]; // Saturday + Sunday
+    else { const sat = shiftN(today, 6 - todayDow); targetDates = [sat, shiftN(sat, 1)]; }
+    dateLabel = "this weekend";
+  }
+  else if (params.date in DOW) {
+    const delta = (DOW[params.date] - todayDow + 7) % 7;             // 0 = today
+    targetDates = [shiftN(today, delta)];
+    dateLabel = delta === 0 ? "today" : params.date.charAt(0).toUpperCase() + params.date.slice(1);
+  }
+  else { targetDates = [today]; dateLabel = "today"; }
 
   try {
-    // Resolve which leagues to scan.
-    let leagueIds;
-    if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
-    else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
-    else {
-      const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
-      if (params.scope === "all") leagueIds = all;
-      else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
-    }
-
-    const cacheKey = `ask:${leagueIds.slice().sort().join("_")}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDate}:${tz || "server"}`;
+    const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;
     const cached = cacheGet(cacheKey);
     if (cached) return res.json({ ...cached, fromCache: true });
 
     const nowSec = Math.floor(Date.now() / 1000);
-    const isToday = targetDate === today;
-    const windowed = params.within !== "all" && isToday;
-    const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
 
-    const groups = await Promise.all(leagueIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null)));
-    const matches = [];
-    for (const g of groups) {
-      if (!g?.fixtures?.length) continue;
-      for (const fx of g.fixtures) {
-        if (fx.status === "finished") continue;
-        if (windowed && !(fx.status === "notstarted" && fx.startTimestamp >= nowSec - 600 && fx.startTimestamp <= cutoff)) continue;
-        const m = fx.prediction?.markets;
-        if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
-        const home = fx.homeTeam.name, away = fx.awayTeam.name;
-
-        const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
-        if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
-
-        const odds = await getFixtureOdds(fx.id).catch(() => null);
-        const priced = {};
-        let ok = true;
-        for (const [k, e] of evals) {
-          let bo = null, bk = null;
-          if (e.marketKey && odds?.best) {
-            const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, m.winner);
-            if (p) { bo = p.odds; bk = p.book; }
-          }
-          if (params.oddsMin != null && (bo == null || bo < params.oddsMin)) { ok = false; break; }
-          if (params.oddsMax != null && (bo == null || bo > params.oddsMax)) { ok = false; break; }
-          priced[k] = { label: CHAT_MARKETS.find((x) => x.key === k)?.label || k, selection: e.selection, prob: Math.round(e.prob), odds: bo, bookmaker: bk, team: e.team || null };
-        }
-        if (!ok) continue;
-
-        const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
-        matches.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, score, markets: priced });
+    // Scan a single date: resolve its leagues, build each league-day, collect the
+    // fixtures that clear every requested market's probability + odds bar.
+    const scanDate = async (targetDate) => {
+      let leagueIds;
+      if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
+      else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
+      else {
+        const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
+        if (params.scope === "all") leagueIds = all;
+        else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
       }
-    }
-    matches.sort((a, b) => b.score - a.score);
 
-    const result = { query: q, params, marketLabels, date: targetDate, leaguesScanned: leagueIds.length, count: matches.length, matches: matches.slice(0, 60) };
+      const isToday = targetDate === today;
+      const windowed = params.within !== "all" && isToday;
+      const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
+
+      const groups = await Promise.all(leagueIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null)));
+      const out = [];
+      for (const g of groups) {
+        if (!g?.fixtures?.length) continue;
+        for (const fx of g.fixtures) {
+          if (fx.status === "finished") continue;
+          if (windowed && !(fx.status === "notstarted" && fx.startTimestamp >= nowSec - 600 && fx.startTimestamp <= cutoff)) continue;
+          const m = fx.prediction?.markets;
+          if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+          const home = fx.homeTeam.name, away = fx.awayTeam.name;
+
+          const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
+          if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
+
+          const odds = await getFixtureOdds(fx.id).catch(() => null);
+          const priced = {};
+          let ok = true;
+          for (const [k, e] of evals) {
+            let bo = null, bk = null;
+            if (e.marketKey && odds?.best) {
+              const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, m.winner);
+              if (p) { bo = p.odds; bk = p.book; }
+            }
+            if (params.oddsMin != null && (bo == null || bo < params.oddsMin)) { ok = false; break; }
+            if (params.oddsMax != null && (bo == null || bo > params.oddsMax)) { ok = false; break; }
+            priced[k] = { label: CHAT_MARKETS.find((x) => x.key === k)?.label || k, selection: e.selection, prob: Math.round(e.prob), odds: bo, bookmaker: bk, team: e.team || null };
+          }
+          if (!ok) continue;
+
+          const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
+          out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced });
+        }
+      }
+      return { leaguesScanned: leagueIds.length, matches: out };
+    };
+
+    const scans = await Promise.all(targetDates.map(scanDate));
+    const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
+    const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
+
+    const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60) };
     cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {

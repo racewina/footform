@@ -3,10 +3,10 @@ import { useState, useRef, useEffect } from "react";
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const EXAMPLES = [
-  "Top Europe teams for over 2.5 and BTTS",
+  "Top Europe teams for over 2.5 and BTTS this weekend",
   "Double chance safe picks in Europe tomorrow",
-  "Premier League teams to score 2+",
-  "South America over 1.5 above 70%",
+  "Premier League teams to score 2+ with odds over 1.46",
+  "Saturday over 1.5 above 70%",
 ];
 
 async function ask(query) {
@@ -53,7 +53,7 @@ export default function AskPage() {
         <span>
           Ask in plain English and I'll run your <strong>own prediction model</strong> over real fixtures —
           markets (over 1.5/2.5, BTTS, to win, double chance, team to score / 2+), a scope
-          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today/tomorrow).
+          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today / tomorrow / this weekend / a weekday).
           e.g. <em>“top Europe teams for over 2.5 and BTTS above 60%”</em>.
         </span>
       </div>
