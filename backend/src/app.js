@@ -122,9 +122,10 @@ app.get("/api/health", (req, res) => {
 
 // Cache-warming trigger, hit by a Vercel Cron (see vercel.json `crons`). It
 // requests the heavy cross-league aggregates THROUGH the edge for the audience
-// timezone(s), today + tomorrow — so the edge/serverless caches stay hot and real
-// users never trigger the cold cross-league build. Tomorrow is warmed too so the
-// local-midnight date rollover is already built when it happens.
+// timezone(s), today through WARM_AHEAD_DAYS out (default 2) — so the edge/
+// serverless caches stay hot and real users never trigger the cold cross-league
+// build. Warming two days ahead means the local-midnight date rollover, and the
+// weekend's heaviest slate, are already built before anyone opens them.
 //
 // WARM_TZS (comma-separated IANA zones) defaults to America/Toronto. Set
 // CRON_SECRET in the Vercel project and the trigger requires Vercel's
@@ -151,9 +152,16 @@ app.get("/api/cron/warm", async (req, res) => {
     }).format(d);
   };
 
+  // Warm today plus the next two days. Two-ahead matters on a Friday: the
+  // weekend's heaviest slate (Sunday) is then already pre-built before anyone
+  // opens it, instead of only being warmed once it becomes "tomorrow" on
+  // Saturday. Safe within the function budget because each /today now returns in
+  // ~45s (time-budgeted, PR #4) rather than a full cold ~110-130s build, and a
+  // heavy day that comes back partial is completed by later 2-hourly runs.
+  const WARM_AHEAD_DAYS = Number(process.env.WARM_AHEAD_DAYS || 2);
   const urls = [];
   for (const tz of tzs) {
-    for (const addDays of [0, 1]) {
+    for (let addDays = 0; addDays <= WARM_AHEAD_DAYS; addDays++) {
       const q = `date=${ymdInTz(tz, addDays)}&tz=${encodeURIComponent(tz)}`;
       urls.push(`${base}/api/today?${q}`);
       urls.push(`${base}/api/counts?${q}`);
@@ -165,11 +173,12 @@ app.get("/api/cron/warm", async (req, res) => {
 
   // Warm SEQUENTIALLY, not concurrently. Each heavy /today build saturates the
   // upstream 450 req/min rate gate on its own, so firing them in parallel makes
-  // them fight for slots and the whole cron overran maxDuration — leaving
-  // "tomorrow" perpetually cold. One at a time, a cold day is ~110-130s and the
-  // cheap /counts calls between them are ~1s, so today+tomorrow finish well
-  // inside the 300s function budget. A per-request timeout keeps one wedged
-  // build from starving the rest.
+  // them fight for slots and the whole cron overran maxDuration — leaving later
+  // days perpetually cold. One at a time, each /today now returns in ~45s (it's
+  // time-budgeted, PR #4) and the /counts calls between them are ~1s, so three
+  // days finish inside the 300s function budget; a day that comes back partial
+  // is finished by later runs. A per-request timeout keeps one wedged build from
+  // starving the rest.
   const REQ_TIMEOUT_MS = Number(process.env.WARM_REQ_TIMEOUT_MS || 200000);
   const started = Date.now();
   const warmed = [];
