@@ -2826,16 +2826,15 @@ function evalChatMarket(key, m, home, away) {
 // Chatbot: a natural-language query is parsed (services/chatbot.js) into markets
 // + scope + filters, then run through the SAME prediction engine the tools use —
 // every fixture where ALL requested markets clear the probability (and optional
-// odds) bar, priced on real bookmaker odds. Public, no external LLM.
-router.get("/ask", async (req, res) => {
-  const tz = req.query.tz;
-  const q = String(req.query.q || "").trim().slice(0, 300);
-  if (!q) return res.status(400).json({ error: "Ask something, e.g. “top Europe teams likely for over 2.5 and BTTS”." });
+// odds) bar, priced on real bookmaker odds. Public, no external LLM. Shared by
+// GET /ask (the web chatbot) and the Telegram bot, so both answer identically.
+export async function runAsk(rawQ, tz) {
+  const q = String(rawQ || "").trim().slice(0, 300);
 
   const params = parseQuery(q, LEAGUES);
   const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
   if (!params.markets.length) {
-    return res.json({ query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." });
+    return { query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." };
   }
 
   const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
@@ -2867,72 +2866,78 @@ router.get("/ask", async (req, res) => {
   const targetDates = [...new Set(resolved.flatMap((r) => r.dates))].sort();
   const dateLabel = [...new Set(resolved.map((r) => r.label))].join(" & ");
 
-  try {
-    const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;
-    const cached = cacheGet(cacheKey);
-    if (cached) return res.json({ ...cached, fromCache: true });
+  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return { ...cached, fromCache: true };
 
-    const nowSec = Math.floor(Date.now() / 1000);
+  const nowSec = Math.floor(Date.now() / 1000);
 
-    // Scan a single date: resolve its leagues, build each league-day, collect the
-    // fixtures that clear every requested market's probability + odds bar.
-    const scanDate = async (targetDate) => {
-      let leagueIds;
-      if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
-      else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
-      else {
-        const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
-        if (params.scope === "all") leagueIds = all;
-        else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
-      }
+  // Scan a single date: resolve its leagues, build each league-day, collect the
+  // fixtures that clear every requested market's probability + odds bar.
+  const scanDate = async (targetDate) => {
+    let leagueIds;
+    if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
+    else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
+    else {
+      const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
+      if (params.scope === "all") leagueIds = all;
+      else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
+    }
 
-      const isToday = targetDate === today;
-      const windowed = params.within !== "all" && isToday;
-      const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
+    const isToday = targetDate === today;
+    const windowed = params.within !== "all" && isToday;
+    const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
 
-      const groups = await Promise.all(leagueIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null)));
-      const out = [];
-      for (const g of groups) {
-        if (!g?.fixtures?.length) continue;
-        for (const fx of g.fixtures) {
-          if (fx.status === "finished") continue;
-          if (windowed && !(fx.status === "notstarted" && fx.startTimestamp >= nowSec - 600 && fx.startTimestamp <= cutoff)) continue;
-          const m = fx.prediction?.markets;
-          if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
-          const home = fx.homeTeam.name, away = fx.awayTeam.name;
+    const groups = await Promise.all(leagueIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null)));
+    const out = [];
+    for (const g of groups) {
+      if (!g?.fixtures?.length) continue;
+      for (const fx of g.fixtures) {
+        if (fx.status === "finished") continue;
+        if (windowed && !(fx.status === "notstarted" && fx.startTimestamp >= nowSec - 600 && fx.startTimestamp <= cutoff)) continue;
+        const m = fx.prediction?.markets;
+        if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+        const home = fx.homeTeam.name, away = fx.awayTeam.name;
 
-          const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
-          if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
+        const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
+        if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
 
-          const odds = await getFixtureOdds(fx.id).catch(() => null);
-          const priced = {};
-          let ok = true;
-          for (const [k, e] of evals) {
-            let bo = null, bk = null;
-            if (e.marketKey && odds?.best) {
-              const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, m.winner);
-              if (p) { bo = p.odds; bk = p.book; }
-            }
-            if (params.oddsMin != null && (bo == null || bo < params.oddsMin)) { ok = false; break; }
-            if (params.oddsMax != null && (bo == null || bo > params.oddsMax)) { ok = false; break; }
-            priced[k] = { label: CHAT_MARKETS.find((x) => x.key === k)?.label || k, selection: e.selection, prob: Math.round(e.prob), odds: bo, bookmaker: bk, team: e.team || null };
+        const odds = await getFixtureOdds(fx.id).catch(() => null);
+        const priced = {};
+        let ok = true;
+        for (const [k, e] of evals) {
+          let bo = null, bk = null;
+          if (e.marketKey && odds?.best) {
+            const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, m.winner);
+            if (p) { bo = p.odds; bk = p.book; }
           }
-          if (!ok) continue;
-
-          const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
-          out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced });
+          if (params.oddsMin != null && (bo == null || bo < params.oddsMin)) { ok = false; break; }
+          if (params.oddsMax != null && (bo == null || bo > params.oddsMax)) { ok = false; break; }
+          priced[k] = { label: CHAT_MARKETS.find((x) => x.key === k)?.label || k, selection: e.selection, prob: Math.round(e.prob), odds: bo, bookmaker: bk, team: e.team || null };
         }
+        if (!ok) continue;
+
+        const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
+        out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced });
       }
-      return { leaguesScanned: leagueIds.length, matches: out };
-    };
+    }
+    return { leaguesScanned: leagueIds.length, matches: out };
+  };
 
-    const scans = await Promise.all(targetDates.map(scanDate));
-    const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
-    const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
+  const scans = await Promise.all(targetDates.map(scanDate));
+  const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
+  const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
 
-    const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60) };
-    cacheSet(cacheKey, result, TTL.FIXTURES);
-    res.json({ ...result, fromCache: false });
+  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60) };
+  cacheSet(cacheKey, result, TTL.FIXTURES);
+  return { ...result, fromCache: false };
+}
+
+router.get("/ask", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "Ask something, e.g. “top Europe teams likely for over 2.5 and BTTS”." });
+  try {
+    res.json(await runAsk(q, req.query.tz));
   } catch (err) {
     console.error(`[ask] ${err.message}`);
     res.status(500).json({ error: err.message });

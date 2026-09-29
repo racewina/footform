@@ -5,6 +5,7 @@ import fixturesRouter from "./routes/fixtures.js";
 import analyzeRouter from "./routes/analyze.js";
 import predictRouter from "./routes/predict.js";
 import seoRouter from "./routes/seo.js";
+import telegramRouter from "./routes/telegram.js";
 import { cacheStats } from "./services/cache.js";
 import { snapshotEnabled, loadSnapshot, saveSnapshot } from "./services/snapshot.js";
 
@@ -48,9 +49,9 @@ app.use("/api", limiter);
 //   fast opens: a visitor after a quiet stretch gets an INSTANT stale response
 //   instead of waiting for a cold function + cold cache to rebuild.
 app.use("/api", (req, res, next) => {
-  // /live sets its own short cache (scores must stay fresh); /health + the cron
-  // warm trigger are uncached (they must run, never serve a cached body).
-  if (req.method !== "GET" || req.path === "/health" || req.path === "/live" || req.path === "/cron/warm") return next();
+  // /live sets its own short cache (scores must stay fresh); /health + every cron
+  // trigger (warm, telegram push) are uncached (they must run, never serve a cached body).
+  if (req.method !== "GET" || req.path === "/health" || req.path === "/live" || req.path.startsWith("/cron/")) return next();
   const sendJson = res.json.bind(res);
   res.json = (body) => {
     // A partial slate (a heavy day still filling in) must not be cached at the
@@ -105,6 +106,7 @@ app.use("/api", async (req, res, next) => {
 app.use("/api", analyzeRouter);
 app.use("/api", predictRouter);
 app.use("/api", fixturesRouter);
+app.use("/api", telegramRouter);
 
 // Server-rendered, crawlable SEO pages (/leagues, /league/:slug). Mounted outside
 // /api so it isn't rate-limited or wrapped by the API cache middleware; it sets
