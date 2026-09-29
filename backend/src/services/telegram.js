@@ -155,14 +155,17 @@ export function formatAsk(result, tz, { title = null, max = 25 } = {}) {
     const live = m.status && m.status !== "notstarted" ? " · 🔴 live" : "";
     return `${i + 1}. ${legs}\n     ${esc(m.home)} v ${esc(m.away)} · ${m.leagueFlag || ""} ${esc(m.league)} · ${esc(ko)}${live}`;
   });
-  const more = result.count > shown.length ? `\n\n…${result.count - shown.length} more below the cut (top ${shown.length} by probability shown).` : "";
 
   const chunks = [];
-  let cur = `${head}\n<b>${result.count} match${result.count === 1 ? "" : "es"}</b>\n`;
+  // "Top 5 of 12" when a count was asked for (or the 25-row cap cut the list).
+  const tally = shown.length < result.count
+    ? `<b>Top ${shown.length} of ${result.count} matches</b> (highest probability)`
+    : `<b>${result.count} match${result.count === 1 ? "" : "es"}</b>`;
+  let cur = `${head}\n${tally}\n`;
   for (const ln of lines) {
     if (cur.length + ln.length + 2 > LIMIT) { chunks.push(cur); cur = ln; }
     else cur += `\n${ln}`;
   }
-  chunks.push(cur + more);
+  chunks.push(cur);
   return chunks;
 }

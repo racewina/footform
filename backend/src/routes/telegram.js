@@ -52,6 +52,7 @@ const helpText = () => {
     "• <i>europe friday and saturday team to score 2+ odds over 1.46</i>",
     "• <i>top europe over 2.5 and btts this weekend above 60%</i>",
     "• <i>premier league double chance tomorrow</i>",
+    "• <i>5 games over 2.5 tomorrow</i> — a number gives you the top N by probability",
     "",
     "Markets: over/under 1.5·2.5·3.5, BTTS, to win, double chance, team to score / 2+.",
     "Scope: top Europe, a continent, or a league name. Days: today, tomorrow, weekend, weekday names.",

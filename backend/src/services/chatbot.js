@@ -23,7 +23,7 @@ export const CHAT_MARKETS = [
 
 // Continent / grouping scopes. TOP_EUROPE = the marquee European competitions.
 export const CHAT_SCOPES = [
-  { key: "top-europe", label: "Top Europe", aliases: ["top europe", "europe top", "top european", "big leagues", "top leagues", "top 5", "top five", "elite leagues", "major leagues", "top flight"] },
+  { key: "top-europe", label: "Top Europe", aliases: ["top europe", "europe top", "top european", "big leagues", "top leagues", "top 5 leagues", "top five leagues", "big 5 leagues", "big five leagues", "elite leagues", "major leagues", "top flight"] },
   { key: "europe", label: "Europe", aliases: ["europe", "european"] },
   { key: "south-america", label: "South America", aliases: ["south america", "conmebol", "latin america"] },
   { key: "north-america", label: "North America", aliases: ["north america", "concacaf"] },
@@ -57,7 +57,7 @@ export function parseQuery(raw, leagues = []) {
   const CMP = "(?:of\\s*)?(?:over|under|above|below|up to|from|at least|at most|greater than|less than|more than|higher than|lower than|no less than|no more than|of at least|of at most|=|>=|<=|>|<|≥|≤)*";
   const qm = q
     .replace(new RegExp(`\\b(?:odds?|price)\\s*${CMP}\\s*\\d+(?:\\.\\d+)?\\s*\\+?`, "g"), " odds ")
-    .replace(/\d+(?:\.\d+)?\s*\+?\s*(?:odds?|price)\b/g, " odds ");
+    .replace(/\d+\.\d+\s*\+?\s*(?:odds?|price)\b/g, " odds "); // decimals only: "score 2+ odds…" keeps its 2+
   const markets = [];
   for (const m of CHAT_MARKETS) {
     if (markets.includes(m.key)) continue;
@@ -160,5 +160,19 @@ export function parseQuery(raw, leagues = []) {
   if (!uniqDays.length) uniqDays.push("today");
   const date = uniqDays[0]; // back-compat: primary day
 
-  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays };
+  // How many picks to return: "5 games", "three picks", "top 5", "best 10".
+  // Null = everything that qualifies. "top 5 leagues" is the SCOPE, not a count,
+  // and numbers glued to goals/odds/% ("2+", "2.5", "60%") are never a count.
+  const WORD_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20 };
+  const CNT = `(\\d{1,2}|${Object.keys(WORD_NUM).join("|")})`;
+  const UNIT = "(?:games?|matches|match|fixtures?|picks?|teams?|selections?|bets?|tips?|options?)";
+  let limit = null;
+  const lm = q.match(new RegExp(`\\b${CNT}\\s+(?:(?:best|top|strongest|safest|likeliest)\\s+)?${UNIT}\\b`))
+    || q.match(new RegExp(`\\b(?:top|best|strongest|safest|only|just)\\s+${CNT}\\b(?!\\s*(?:leagues?|\\+|%|\\.\\d|goals?))`));
+  if (lm) {
+    const v = WORD_NUM[lm[1]] ?? Number(lm[1]);
+    if (v >= 1 && v <= 60) limit = v;
+  }
+
+  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays, limit };
 }

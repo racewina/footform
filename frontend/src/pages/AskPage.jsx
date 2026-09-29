@@ -53,7 +53,7 @@ export default function AskPage() {
         <span>
           Ask in plain English and I'll run your <strong>own prediction model</strong> over real fixtures —
           markets (over 1.5/2.5, BTTS, to win, double chance, team to score / 2+), a scope
-          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today / tomorrow / this weekend / a weekday).
+          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today / tomorrow / this weekend / a weekday, how many — “5 games”).
           e.g. <em>“top Europe teams for over 2.5 and BTTS above 60%”</em>.
         </span>
       </div>
@@ -113,7 +113,9 @@ function Answer({ res }) {
       <div style={styles.interp}>
         <strong>{marketLabels.join(" + ") || "picks"}</strong> · {scopeLabel} · {date}
         {filters.length > 0 && <> · {filters.join(" · ")}</>}
-        <span style={styles.count}>{count} match{count === 1 ? "" : "es"}</span>
+        <span style={styles.count}>
+          {matches.length < count ? `top ${matches.length} of ${count}` : `${count} match${count === 1 ? "" : "es"}`}
+        </span>
       </div>
       {count === 0 && (
         <div style={styles.botNote}>

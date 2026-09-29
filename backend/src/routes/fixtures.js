@@ -2867,8 +2867,16 @@ export async function runAsk(rawQ, tz) {
   const dateLabel = [...new Set(resolved.map((r) => r.label))].join(" & ");
 
   const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;
+  // The count ("5 games") isn't in the key: the full ranked list is cached once and
+  // cut to N on the way out, so "5 games" and "10 games" share one scan. The
+  // caller's own query/params replace the cached ones (same filters by key).
+  const shape = (r, fromCache) => ({
+    ...r, query: q, params, fromCache,
+    limit: params.limit || null,
+    matches: params.limit ? r.matches.slice(0, params.limit) : r.matches,
+  });
   const cached = cacheGet(cacheKey);
-  if (cached) return { ...cached, fromCache: true };
+  if (cached) return shape(cached, true);
 
   const nowSec = Math.floor(Date.now() / 1000);
 
@@ -2930,7 +2938,7 @@ export async function runAsk(rawQ, tz) {
 
   const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60) };
   cacheSet(cacheKey, result, TTL.FIXTURES);
-  return { ...result, fromCache: false };
+  return shape(result, false);
 }
 
 router.get("/ask", async (req, res) => {
