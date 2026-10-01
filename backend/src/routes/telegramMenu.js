@@ -10,7 +10,7 @@
 // tapped search and a typed one are answered by exactly the same engine — and
 // the query is shown, which teaches the typed syntax for free.
 
-import { runAsk } from "./fixtures.js";
+import { runAsk, toolsPass } from "./fixtures.js";
 import { parseQuery, CHAT_MARKETS, CHAT_SCOPES, normText } from "../services/chatbot.js";
 import { aiEnabled, understand, explain, composeQuery } from "../services/ai.js";
 import { LEAGUES } from "../data/leagues.js";
@@ -28,7 +28,7 @@ const menuText = () => [
   "⚽ <b>FootForm</b> — here's what I can do:",
   "",
   "🔎 <b>Find picks</b> — tap through market › region › day › how many",
-  "🎫 <b>Today's slips</b> — VIP, Safe accumulators, Value bets, Europe Strongest",
+  "🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x), Value bets, Europe Strongest",
   "📊 <b>Results</b> — how the slips did (✅/❌ per leg)",
   "🗓 <b>My daily list</b> — searches sent to you every morning",
   aiEnabled()
@@ -176,11 +176,14 @@ const apiBase = () =>
   process.env.TELEGRAM_INTERNAL_BASE
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : `http://localhost:${process.env.PORT || 3001}`);
 
-async function apiGet(path) {
+// `gated` feeds (Blend) get the tools code as a header, server-side only — the bot
+// is locked to TELEGRAM_ALLOWED_CHAT_IDS, and app.js marks code-carrying requests
+// private/no-store so these responses never land in the shared CDN cache.
+async function apiGet(path, { gated = false } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 240 * 1000);
   try {
-    const res = await fetch(`${apiBase()}/api${path}`, { signal: ctrl.signal });
+    const res = await fetch(`${apiBase()}/api${path}`, { signal: ctrl.signal, headers: gated ? { "x-odds-pass": toolsPass() } : {} });
     if (!res.ok) throw new Error(`the ${path.split("?")[0]} feed returned ${res.status}`);
     return await res.json();
   } finally {
@@ -258,59 +261,77 @@ function fmtEurope(d, graded, dayLabel) {
   return chunkLines(head, blocks);
 }
 
-// [code, label, live path, results path, formatter]
+function fmtBlend(d, graded, dayLabel, title) {
+  const slips = (d.slips || []).filter((x) => x.legCount > 0);
+  const head = `${title} · ${dayLabel}\n<i>real bookmaker prices · model probability</i>`;
+  if (!slips.length) return [`${head}\n\nNo Blend slips for ${dayLabel} — not enough priced legs left.`];
+  const lines = slips.map((s, i) => {
+    const res = graded && s.won != null ? (s.won ? " — ✅ WON" : ` — ❌ ${s.legHits ?? 0}/${s.legCount}`) : "";
+    const target = s.target ? ` (target ${s.target.lo}–${s.target.hi}x)` : "";
+    const legs = (s.legs || []).map((l) => `   ${mark(l.hit, graded)} ${esc(l.selection)}${pct(l.probability)}${at2(l.bookOdds ?? l.odds)}${l.bookmaker ? ` ${esc(l.bookmaker)}` : ""}\n      ${matchLine(l)}${graded ? scoreOf(l) : ""}`).join("\n");
+    return `<b>Slip ${i + 1}</b>${target} · book${at2(s.combinedBookOdds)} (fair${at2(s.combinedFairOdds)}) ·${pct(s.combinedProbability)}${res}\n${legs}`;
+  });
+  return chunkLines(head, lines);
+}
+
+// code → label, live path, results path (null = not graded), formatter, extra
+// query, and whether the feed is behind the tools code.
 const SLIPS = [
-  ["vip", "👑 VIP slips", "/vip", "/vip/results", fmtVip],
-  ["sf", "🛡 Safe accumulators", "/accumulators", "/accumulators/results", fmtSafe],
-  ["vb", "💎 Value bets", "/value", null, (d, _g, lbl) => fmtValue(d, lbl)],
-  ["eu", "🇪🇺 Europe Strongest", "/europe-strongest", "/europe-strongest", fmtEurope],
+  { code: "vip", label: "👑 VIP slips", live: "/vip", results: "/vip/results", fmt: fmtVip },
+  { code: "sf", label: "🛡 Safe accumulators", live: "/accumulators", results: "/accumulators/results", fmt: fmtSafe },
+  { code: "bb", label: "🧪 Blend 3–10x", live: "/blend-bets", results: "/blend-bets/results", gated: true,
+    fmt: (d, g, lbl) => fmtBlend(d, g, lbl, "🧪 <b>Blend bets</b> 3–10x") },
+  { code: "bh", label: "🚀 Blend 10–50x", live: "/blend-bets", results: "/blend-bets/results", gated: true, extra: "&band=high",
+    fmt: (d, g, lbl) => fmtBlend(d, g, lbl, "🚀 <b>Blend bets</b> 10–50x") },
+  { code: "vb", label: "💎 Value bets", live: "/value", results: null, fmt: (d, _g, lbl) => fmtValue(d, lbl) },
+  { code: "eu", label: "🇪🇺 Europe Strongest", live: "/europe-strongest", results: "/europe-strongest", resultsExtra: "&includeFinished=1", fmt: fmtEurope },
 ];
 const BACK_TO = (code) => ["⬅️ Back", code];
+const feedQuery = (day, extra = "") => `?date=${ymd(DAY_OFFSET[day])}&tz=${encodeURIComponent(botTz())}${extra}`;
 
 export async function slipsFlow(chatId, messageId, [kind, day]) {
   if (!kind) {
     return editText(chatId, messageId, "🎫 <b>Today's slips</b> — which one?",
-      keyboard([...grid(SLIPS.map(([c, l]) => [l, `sl|${c}`]), 2), [BACK_TO("m"), HOME]]));
+      keyboard([...grid(SLIPS.map((x) => [x.label, `sl|${x.code}`]), 2), [BACK_TO("m"), HOME]]));
   }
-  const slip = SLIPS.find((s) => s[0] === kind);
+  const slip = SLIPS.find((x) => x.code === kind);
   if (!slip) return showMenu(chatId, messageId);
   if (!day) {
-    return editText(chatId, messageId, `${slip[1]} — which day?`,
+    return editText(chatId, messageId, `${slip.label} — which day?`,
       keyboard([[["Today", `sl|${kind}|t`], ["Tomorrow", `sl|${kind}|tm`]], [BACK_TO("sl"), HOME]]));
   }
   if (!(day in DAY_OFFSET)) return showMenu(chatId, messageId);
   const label = DAY_LABEL[day];
-  await editText(chatId, messageId, `⏳ Loading ${slip[1]} for ${label}… (a cold day can take a minute or two)`);
+  await editText(chatId, messageId, `⏳ Loading ${slip.label} for ${label}… (a cold day can take a minute or two)`);
   let chunks;
   try {
-    const d = await apiGet(`${slip[2]}?date=${ymd(DAY_OFFSET[day])}&tz=${encodeURIComponent(botTz())}`);
-    chunks = slip[4](d, false, label);
+    const d = await apiGet(`${slip.live}${feedQuery(day, slip.extra)}`, { gated: slip.gated });
+    chunks = slip.fmt(d, false, label);
   } catch (e) {
-    chunks = [`⚠️ Couldn't load ${slip[1]}: ${esc(e.message)}`];
+    chunks = [`⚠️ Couldn't load ${slip.label}: ${esc(e.message)}`];
   }
   return deliver(chatId, messageId, chunks, keyboard([[["🎫 Other slips", "sl"], HOME]]));
 }
 
-const RESULT_SLIPS = SLIPS.filter((s) => s[3]);
+const RESULT_SLIPS = SLIPS.filter((x) => x.results);
 export async function resultsFlow(chatId, messageId, [kind, day]) {
   if (!kind) {
     return editText(chatId, messageId, "📊 <b>Results</b> — which slips?",
-      keyboard([...grid(RESULT_SLIPS.map(([c, l]) => [l, `rs|${c}`]), 2), [BACK_TO("m"), HOME]]));
+      keyboard([...grid(RESULT_SLIPS.map((x) => [x.label, `rs|${x.code}`]), 2), [BACK_TO("m"), HOME]]));
   }
-  const slip = RESULT_SLIPS.find((s) => s[0] === kind);
+  const slip = RESULT_SLIPS.find((x) => x.code === kind);
   if (!slip) return showMenu(chatId, messageId);
   if (!day) {
-    return editText(chatId, messageId, `📊 ${slip[1]} — which day?`,
+    return editText(chatId, messageId, `📊 ${slip.label} — which day?`,
       keyboard([[["Yesterday", `rs|${kind}|y`], ["Today so far", `rs|${kind}|t`]], [BACK_TO("rs"), HOME]]));
   }
   if (!(day in DAY_OFFSET)) return showMenu(chatId, messageId);
   const label = DAY_LABEL[day];
-  await editText(chatId, messageId, `⏳ Grading ${slip[1]} for ${label}…`);
+  await editText(chatId, messageId, `⏳ Grading ${slip.label} for ${label}…`);
   let chunks;
   try {
-    const extra = kind === "eu" ? "&includeFinished=1" : "";
-    const d = await apiGet(`${slip[3]}?date=${ymd(DAY_OFFSET[day])}&tz=${encodeURIComponent(botTz())}${extra}`);
-    chunks = slip[4](d, true, label);
+    const d = await apiGet(`${slip.results}${feedQuery(day, `${slip.extra || ""}${slip.resultsExtra || ""}`)}`, { gated: slip.gated });
+    chunks = slip.fmt(d, true, label);
   } catch (e) {
     chunks = [`⚠️ Couldn't load results: ${esc(e.message)}`];
   }
@@ -425,7 +446,7 @@ export async function handleCallback(cq, { deadline }) {
 // ("what about btts?" needs the previous region/day; "why is #2 in?" needs results).
 const FOLLOWUP_RX = /^(?:why|explain|how come|what about|how about|same\b|instead|compare|which (?:one|of)|is (?:it|that|this|the)\b|are (?:they|these|those)\b|should i|tell me|more (?:on|about)|what do you think|thoughts|save (?:that|this|it)\b)/i;
 const DAILY_TITLE_RX = /^🗓 Daily \d+: (.+)$/;
-const SLIP_CODE = { vip: "vip", safe: "sf", value: "vb", europe: "eu" };
+const SLIP_CODE = { vip: "vip", safe: "sf", blend: "bb", blend_high: "bh", value: "vb", europe: "eu" };
 
 const nowLabel = () => new Intl.DateTimeFormat("en-US", { timeZone: botTz(), weekday: "long", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) + ` (${botTz()})`;
 const resultLine = (m, i) => `${i + 1}. ${m.home} v ${m.away} · ${m.league} · ${m.kickoffLabel} · ${Object.values(m.markets || {}).map((l) => `${l.selection} ${l.prob}%${l.odds != null ? ` @${l.odds}` : ""}`).join(", ")}`;
@@ -482,7 +503,7 @@ async function aiReply(chatId, text, msg) {
         return slipsFlow(chatId, id, [code, u.slip?.day === "tomorrow" ? "tm" : "t"]);
       }
       case "results": {
-        if (u.slip?.kind === "value") return say("Value bets aren't graded here — results cover VIP, Safe and Europe Strongest.", keyboard([[["📊 Results", "rs"], HOME]]));
+        if (u.slip?.kind === "value") return say("Value bets aren't graded here — results cover VIP, Safe, Blend and Europe Strongest.", keyboard([[["📊 Results", "rs"], HOME]]));
         const code = SLIP_CODE[u.slip?.kind] || "vip";
         return resultsFlow(chatId, id, [code, u.slip?.day === "today" ? "t" : "y"]);
       }

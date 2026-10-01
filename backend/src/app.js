@@ -15,6 +15,20 @@ const app = express();
 // read the real client IP from X-Forwarded-For without throwing.
 app.set("trust proxy", 1);
 
+// Code-gated tools must NEVER land in the shared CDN cache. Vercel caches by URL,
+// so once an unlocked browser (or the Telegram bot) fetched a gated URL, a public
+// copy was served to anyone hitting that URL without the code. Every gated path
+// is forced to private/no-store here — whatever the route sets later — so the
+// gate can't be bypassed through the cache. Public pages keep their edge caching.
+const GATED_PATH_RX = /^\/(?:api\/(?:blend-bets|team-2plus|corner-board|odds-generator|predict)(?:\/|$)|api\/match\/[^/]+\/event-board(?:\/|$)|predict(?:\/|$)|scan(?:\/|$))/;
+app.use((req, res, next) => {
+  if (!GATED_PATH_RX.test(req.path)) return next();
+  const setHeader = res.setHeader.bind(res);
+  res.setHeader = (name, value) => setHeader(name, String(name).toLowerCase() === "cache-control" ? "private, no-store" : value);
+  res.setHeader("Cache-Control", "private, no-store");
+  next();
+});
+
 app.use(
   cors({
     // Same-origin in production (frontend + API share the Vercel domain);

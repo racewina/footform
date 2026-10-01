@@ -92,7 +92,7 @@ const UNDERSTAND_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          kind: { type: "string", enum: ["vip", "safe", "value", "europe"] },
+          kind: { type: "string", enum: ["vip", "safe", "blend", "blend_high", "value", "europe"] },
           day: { type: "string", enum: ["yesterday", "today", "tomorrow"] },
         },
         required: ["kind", "day"],
@@ -110,8 +110,8 @@ Choose exactly one intent:
 - "search": find matches for one or more betting markets. Fill "search".
 - "save_daily": the user wants a search saved to their daily morning list ("send me this every day", "save that"). Fill "search" with the search to save (if they mean the previous search, rebuild it from the context).
 - "explain": a question about matches already shown ("why is #2 in there?", "tell me more about the Tamworth game", "is the first one safe?", "compare 1 and 3"). Put the 1-based numbers of the matches they mean, from the LAST RESULTS list, in "match_refs" (by number, team name or position). If no results are in context, or you can't tell which match, use "chat" and ask them to reply to the results message.
-- "slips": they want one of the bot's ready-made slips. Fill "slip": kind vip (VIP slips), safe (safe accumulators), value (value bets: book price above the model's fair price), europe (Europe Strongest); day today or tomorrow.
-- "results": how a slip did / graded results. Fill "slip" with kind vip, safe or europe and day yesterday or today.
+- "slips": they want one of the bot's ready-made slips. Fill "slip": kind vip (VIP slips), safe (safe accumulators), blend (Blend bets: accumulators on real bookmaker prices, 3–10x), blend_high (Blend bets at bigger odds, 10–50x — "big blend", "long shot acca"), value (value bets: book price above the model's fair price), europe (Europe Strongest); day today or tomorrow.
+- "results": how a slip did / graded results. Fill "slip" with kind vip, safe, blend, blend_high or europe and day yesterday or today.
 - "menu": they want to see what the bot can do.
 - "chat": anything else (thanks, small talk, unsupported requests, clarifying questions). Put a short, friendly reply (max 2 sentences) in "reply"; if useful, point them to the menu. Never invent football facts.
 

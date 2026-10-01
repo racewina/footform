@@ -1921,6 +1921,8 @@ const ODDS_GEN_MAX_FIXTURES = 80; // upper bound on per-request odds/corner fan-
 // server — the client never ships it; a user types it and it rides along as the
 // `x-odds-pass` header. Override in the environment; falls back to the set code.
 const ODDS_GEN_PASS = process.env.ODDS_GEN_PASS || "1211";
+// Server-side only: lets the private Telegram bot read the gated feeds (Blend).
+export const toolsPass = () => ODDS_GEN_PASS;
 router.get("/odds-generator", async (req, res) => {
   const pass = req.get("x-odds-pass") || req.query.pass || "";
   if (String(pass) !== ODDS_GEN_PASS) {
