@@ -67,6 +67,22 @@ export async function sendChunks(chatId, chunks) {
   for (const c of chunks) await sendText(chatId, c);
 }
 
+// Edit a message in place (menus step forward by editing, not by spamming new
+// messages). `markup` = inline keyboard or null. Returns null on failure (e.g.
+// the message is too old to edit) so callers can fall back to sending.
+export function editText(chatId, messageId, text, markup = null) {
+  return tg("editMessageText", {
+    chat_id: chatId, message_id: messageId, text, parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+    ...(markup ? { reply_markup: markup } : {}),
+  });
+}
+
+// Inline keyboard from rows of [label, callbackData] pairs.
+export const keyboard = (rows) => ({
+  inline_keyboard: rows.filter((r) => r.length).map((r) => r.map(([text, data]) => ({ text, callback_data: data }))),
+});
+
 // Point the bot's webhook at this deployment (idempotent — safe to call hourly;
 // re-setting also picks up a rotated TELEGRAM_WEBHOOK_SECRET) and publish the
 // command menu. Host = TELEGRAM_WEBHOOK_HOST, else Vercel's production domain.
@@ -75,9 +91,10 @@ export async function ensureWebhook() {
   const host = (process.env.TELEGRAM_WEBHOOK_HOST || process.env.VERCEL_PROJECT_PRODUCTION_URL || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
   if (!telegramEnabled() || !secret || !host) return { ok: false, reason: "missing token, webhook secret, or host" };
   const url = `https://${host}/api/telegram/webhook`;
-  const set = await tg("setWebhook", { url, secret_token: secret, allowed_updates: ["message"] });
+  const set = await tg("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] });
   await tg("setMyCommands", {
     commands: [
+      { command: "menu", description: "What I can do — tap a task" },
       { command: "help", description: "How to ask + examples" },
       { command: "daily", description: "Show / add / remove saved daily queries" },
       { command: "now", description: "Send the daily list right now" },
@@ -125,7 +142,15 @@ const SCOPE_LABEL = {
 const LIMIT = 3800; // headroom under Telegram's 4096-char message cap
 
 // runAsk() result → one or more HTML message strings.
-export function formatAsk(result, tz, { title = null, max = 25 } = {}) {
+// `footer` (plain text) goes on the LAST chunk — the bot reads it back from the
+// message when 💾 Save is tapped, so it must survive Telegram stripping the HTML.
+export function formatAsk(result, tz, { title = null, max = 25, footer = null } = {}) {
+  const chunks = formatAskChunks(result, tz, { title, max });
+  if (footer) chunks[chunks.length - 1] += `\n\n${esc(footer)}`;
+  return chunks;
+}
+
+function formatAskChunks(result, tz, { title, max }) {
   const top = title ? `${title}\n` : "";
   if (result.note) return [`${top}${esc(result.note)}`];
 
@@ -136,7 +161,11 @@ export function formatAsk(result, tz, { title = null, max = 25 } = {}) {
   else if (p.oddsMin != null) filters.push(`odds ≥${p.oddsMin}`);
   else if (p.oddsMax != null) filters.push(`odds ≤${p.oddsMax}`);
   if (p.within && p.within !== "all") filters.push(`next ${p.within}h`);
-  const head = `${top}⚽ <b>${esc((result.marketLabels || []).join(" + "))}</b>\n${esc(scope)} · ${esc(result.date)} · ${esc(filters.join(" · "))}`;
+  const f = result.filters || {};
+  const only = f.include?.length ? `\nOnly: ${esc(f.include.join(", "))}` : "";
+  const excl = f.exclude?.length ? `\nExcluding: ${esc(f.exclude.join(", "))}` : "";
+  const notes = (result.filterNotes || []).map((n) => `\n⚠️ ${esc(n)}`).join("");
+  const head = `${top}⚽ <b>${esc((result.marketLabels || []).join(" + "))}</b>\n${esc(scope)} · ${esc(result.date)} · ${esc(filters.join(" · "))}${only}${excl}${notes}`;
 
   if (!result.count) {
     const why = result.leaguesScanned === 0

@@ -53,7 +53,7 @@ export default function AskPage() {
         <span>
           Ask in plain English and I'll run your <strong>own prediction model</strong> over real fixtures —
           markets (over 1.5/2.5, BTTS, to win, double chance, team to score / 2+), a scope
-          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today / tomorrow / this weekend / a weekday, how many — “5 games”).
+          (top Europe, a continent, or a named league), and filters (a % bar, odds range, today / tomorrow / this weekend / a weekday, how many — “5 games”, and only / exclude — “exclude friendlies”, “only germany”).
           e.g. <em>“top Europe teams for over 2.5 and BTTS above 60%”</em>.
         </span>
       </div>
@@ -96,7 +96,7 @@ export default function AskPage() {
 }
 
 function Answer({ res }) {
-  const { matches = [], count, marketLabels = [], params = {}, note, leaguesScanned, date } = res;
+  const { matches = [], count, marketLabels = [], params = {}, note, leaguesScanned, date, filters: picked = {}, filterNotes = [] } = res;
   const scopeLabel = params.scope === "top-europe" ? "top Europe"
     : params.scope === "league" ? params.leagueName
     : params.scope === "all" ? "all leagues"
@@ -105,6 +105,8 @@ function Answer({ res }) {
   if (params.minProb) filters.push(`≥ ${params.minProb}%`);
   if (params.oddsMin != null || params.oddsMax != null) filters.push(`odds ${params.oddsMin ?? "–"}–${params.oddsMax ?? "–"}`);
   if (params.within && params.within !== "all") filters.push(`next ${params.within}h`);
+  if (picked.include?.length) filters.push(`only ${picked.include.join(", ")}`);
+  if (picked.exclude?.length) filters.push(`excl. ${picked.exclude.join(", ")}`);
 
   if (note) return <div style={styles.botNote}>{note}</div>;
 
@@ -117,6 +119,7 @@ function Answer({ res }) {
           {matches.length < count ? `top ${matches.length} of ${count}` : `${count} match${count === 1 ? "" : "es"}`}
         </span>
       </div>
+      {filterNotes.map((n) => <div key={n} style={styles.botNote}>⚠️ {n}</div>)}
       {count === 0 && (
         <div style={styles.botNote}>
           Nothing clears that bar {leaguesScanned === 0 ? "— no upcoming fixtures for that scope right now (try “tomorrow”)." : "for the fixtures scanned. Loosen the % or try a wider scope / tomorrow."}

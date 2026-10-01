@@ -39,7 +39,7 @@ import { oddsCandidates, bestInRange, oddsRangeLadder, filterByMarket } from "..
 import { buildEloModel } from "../services/elo.js";
 import { loadSnapshot, saveSnapshot } from "../services/snapshot.js";
 import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, NO_BET_LEAGUES, continentFor } from "../data/leagues.js";
-import { parseQuery, CHAT_MARKETS, TOP_EUROPE_IDS, CONTINENT_OF_SCOPE } from "../services/chatbot.js";
+import { parseQuery, CHAT_MARKETS, TOP_EUROPE_IDS, CONTINENT_OF_SCOPE, CUP_RX, normText } from "../services/chatbot.js";
 import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
 const router = express.Router();
@@ -2866,7 +2866,29 @@ export async function runAsk(rawQ, tz) {
   const targetDates = [...new Set(resolved.flatMap((r) => r.dates))].sort();
   const dateLabel = [...new Set(resolved.map((r) => r.label))].join(" & ");
 
-  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}`;
+  // Include/exclude filters (see chatbot.js extractFilters). League-level terms
+  // (league/country/continent/friendlies/cups) prune whole leagues BEFORE the
+  // scan; team terms are matched per fixture. Include = keep if ANY include term
+  // matches; exclude = drop if ANY exclude term matches.
+  const inc = params.include || [], exc = params.exclude || [];
+  const filterSig = [...inc.map((t) => `+${t.kind}:${t.ids?.join(".") || t.value || ""}`), ...exc.map((t) => `-${t.kind}:${t.ids?.join(".") || t.value || ""}`)].join(",");
+  const leagueHit = (t, lg) => {
+    if (!lg) return false;
+    switch (t.kind) {
+      case "league": return t.ids.includes(String(lg.id));
+      case "country": return lg.country === t.value;
+      case "continent": return continentFor(lg.country) === t.value;
+      case "friendlies": return /friendl/i.test(lg.name);
+      case "cups": return CUP_RX.test(lg.name);
+      default: return false;
+    }
+  };
+  const teamRx = new Map([...inc, ...exc].filter((t) => t.kind === "team").map((t) => [t.value, new RegExp(`\\b${t.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`)]));
+  const teamHit = (t, fx) => teamRx.get(t.value).test(normText(fx.homeTeam.name)) || teamRx.get(t.value).test(normText(fx.awayTeam.name));
+  const incHasTeam = inc.some((t) => t.kind === "team");
+  const matchedTeamTerms = new Set();
+
+  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${filterSig}`;
   // The count ("5 games") isn't in the key: the full ranked list is cached once and
   // cut to N on the way out, so "5 games" and "10 games" share one scan. The
   // caller's own query/params replace the cached ones (same filters by key).
@@ -2891,6 +2913,13 @@ export async function runAsk(rawQ, tz) {
       if (params.scope === "all") leagueIds = all;
       else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
     }
+    leagueIds = leagueIds.filter((id) => {
+      const lg = LEAGUES_BY_ID[id];
+      if (exc.some((t) => leagueHit(t, lg))) return false;
+      // With only league-level includes we can skip non-matching leagues outright.
+      if (inc.length && !incHasTeam && !inc.some((t) => leagueHit(t, lg))) return false;
+      return true;
+    });
 
     const isToday = targetDate === today;
     const windowed = params.within !== "all" && isToday;
@@ -2906,6 +2935,10 @@ export async function runAsk(rawQ, tz) {
         const m = fx.prediction?.markets;
         if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
         const home = fx.homeTeam.name, away = fx.awayTeam.name;
+
+        if (teamRx.size) for (const [v] of teamRx) if (teamHit({ value: v }, fx)) matchedTeamTerms.add(v);
+        if (exc.some((t) => t.kind === "team" && teamHit(t, fx))) continue;
+        if (inc.length && !inc.some((t) => (t.kind === "team" ? teamHit(t, fx) : leagueHit(t, LEAGUES_BY_ID[g.league?.id] || g.league)))) continue;
 
         const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
         if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
@@ -2926,7 +2959,17 @@ export async function runAsk(rawQ, tz) {
         if (!ok) continue;
 
         const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
-        out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced });
+        // Compact model snapshot so a follow-up ("why this one?") can be explained
+        // from the same numbers that selected it.
+        const pr = fx.prediction || {};
+        const model = {
+          home: pr.home, draw: pr.draw, away: pr.away,
+          homeForm: (pr.homeForm || []).join(""), awayForm: (pr.awayForm || []).join(""),
+          homeGoalsFor: pr.homeGoalsFor, homeGoalsAgainst: pr.homeGoalsAgainst,
+          awayGoalsFor: pr.awayGoalsFor, awayGoalsAgainst: pr.awayGoalsAgainst,
+          xgHome: m.xgHome, xgAway: m.xgAway, over25: m.over25, btts: m.btts,
+        };
+        out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced, model });
       }
     }
     return { leaguesScanned: leagueIds.length, matches: out };
@@ -2936,7 +2979,13 @@ export async function runAsk(rawQ, tz) {
   const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
   const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
 
-  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60) };
+  // A team term that matched no fixture at all is almost always a typo or a
+  // nickname ("man utd") — say so rather than silently returning nothing.
+  const filterNotes = [...inc, ...exc]
+    .filter((t) => t.kind === "team" && !matchedTeamTerms.has(t.value))
+    .map((t) => `${t.label} didn't match any team, league or country in the fixtures scanned.`);
+  const filters = { include: inc.map((t) => t.label), exclude: exc.map((t) => t.label) };
+  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60), filters, filterNotes };
   cacheSet(cacheKey, result, TTL.FIXTURES);
   return shape(result, false);
 }

@@ -1,8 +1,10 @@
 // FootForm Telegram bot.
 //
-//   POST /api/telegram/webhook      Telegram → us. Any text is run through runAsk()
-//                                   (the same engine as the web chatbot); /daily
-//                                   manages saved queries; /now sends them.
+//   POST /api/telegram/webhook      Telegram → us. Messages + button taps. Typed
+//                                   questions run through runAsk() (same engine as
+//                                   the web chatbot); "menu"/"what can you do" and
+//                                   every button go to the interactive layer in
+//                                   telegramMenu.js; /daily + /now manage the list.
 //   GET  /api/cron/telegram-push    Hourly Vercel cron. At TELEGRAM_PUSH_HOURS
 //                                   (local, botTz) it sends each allowed chat its
 //                                   saved daily queries. Also (re)registers the
@@ -19,13 +21,11 @@
 import express from "express";
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
-import { runAsk } from "./fixtures.js";
-import { parseQuery } from "../services/chatbot.js";
-import { LEAGUES } from "../data/leagues.js";
 import {
-  tg, telegramEnabled, allowedChatIds, botTz, pushHours, esc, sendText, sendChunks,
-  ensureWebhook, readDailyPin, writeDaily, formatAsk, MAX_DAILY,
+  tg, telegramEnabled, allowedChatIds, botTz, pushHours, esc, sendText, keyboard,
+  ensureWebhook, readDailyPin, writeDaily,
 } from "../services/telegram.js";
+import { isMenuIntent, showMenu, helpText, handleText, addDaily, runDaily, handleCallback } from "./telegramMenu.js";
 
 const router = express.Router();
 const WORK_BUDGET_MS = 240 * 1000; // leave headroom under the 300s maxDuration
@@ -45,83 +45,34 @@ const seenUpdate = (id) => {
   return false;
 };
 
-const helpText = () => {
-  const hours = pushHours().map((h) => `${String(h).padStart(2, "0")}:00`).join(", ");
-  return [
-    "⚽ <b>FootForm</b> — ask in plain English and I'll run the prediction model:",
-    "• <i>europe friday and saturday team to score 2+ odds over 1.46</i>",
-    "• <i>top europe over 2.5 and btts this weekend above 60%</i>",
-    "• <i>premier league double chance tomorrow</i>",
-    "• <i>5 games over 2.5 tomorrow</i> — a number gives you the top N by probability",
-    "",
-    "Markets: over/under 1.5·2.5·3.5, BTTS, to win, double chance, team to score / 2+.",
-    "Scope: top Europe, a continent, or a league name. Days: today, tomorrow, weekend, weekday names.",
-    "",
-    `<b>Daily push</b> — sent at ${esc(hours)} (${esc(botTz())}):`,
-    "/daily <i>query</i> — save a query",
-    "/daily — show saved queries",
-    "/daily remove 2 — delete #2 · /daily clear — delete all",
-    "/now — send the daily list right now",
-  ].join("\n");
-};
-
-// Run each saved query and send the results. Stops starting new ones past the deadline.
-async function runDaily(chatId, tz, { deadline, manual = false } = {}) {
-  const { queries } = await readDailyPin(chatId);
-  if (!queries.length) {
-    if (manual) await sendText(chatId, "No daily queries saved yet. Add one with /daily <i>query</i>.");
-    return 0;
-  }
-  let sent = 0;
-  for (const [i, q] of queries.entries()) {
-    if (Date.now() > deadline) {
-      await sendText(chatId, `⏱ Ran out of time before “${esc(q)}” — send /now to retry.`);
-      break;
-    }
-    try {
-      const r = await runAsk(q, tz);
-      await sendChunks(chatId, formatAsk(r, tz, { title: `🗓 <b>Daily ${i + 1}:</b> <i>${esc(q)}</i>` }));
-      sent++;
-    } catch (e) {
-      await sendText(chatId, `⚠️ “${esc(q)}” failed: ${esc(e.message)}`);
-    }
-  }
-  return sent;
-}
+const MENU_BTN = keyboard([[["📋 Menu", "m"]]]);
 
 async function handleDaily(chatId, arg) {
-  const { messageId, queries } = await readDailyPin(chatId);
   const a = arg.trim();
+  if (a && !/^clear$/i.test(a) && !/^(?:remove|rm|delete|del)\s+\d+$/i.test(a)) {
+    return sendText(chatId, await addDaily(chatId, a), { reply_markup: keyboard([[["🗓 My daily list", "dl"], ["📋 Menu", "m"]]]) });
+  }
+  const { messageId, queries } = await readDailyPin(chatId);
   const list = (qs) => (qs.length ? qs.map((q, i) => `${i + 1}. ${esc(q)}`).join("\n") : "<i>(none)</i>");
-
   if (!a) {
-    return sendText(chatId, `🗓 <b>Daily queries</b>\n${list(queries)}\n\nAdd: /daily <i>query</i> · Remove: /daily remove 2 · /daily clear`);
+    return sendText(chatId, `🗓 <b>Daily searches</b>\n${list(queries)}\n\nManage them with buttons: 🗓 My daily list.`, { reply_markup: keyboard([[["🗓 My daily list", "dl"], ["📋 Menu", "m"]]]) });
   }
   if (/^clear$/i.test(a)) {
     await writeDaily(chatId, [], messageId);
-    return sendText(chatId, "🗑 Daily list cleared.");
+    return sendText(chatId, "🧹 Daily list cleared.", { reply_markup: MENU_BTN });
   }
-  const rm = a.match(/^(?:remove|rm|delete|del)\s+(\d+)$/i);
-  if (rm) {
-    const idx = Number(rm[1]) - 1;
-    if (idx < 0 || idx >= queries.length) return sendText(chatId, `No #${rm[1]} — you have ${queries.length} saved.`);
-    const next = queries.filter((_, i) => i !== idx);
-    await writeDaily(chatId, next, messageId);
-    return sendText(chatId, `Removed #${rm[1]}.\n${list(next)}`);
-  }
-  // Add — only if the parser can find a market in it, so the push never sends a dud.
-  if (!parseQuery(a, LEAGUES).markets.length) {
-    return sendText(chatId, "I couldn't spot a market in that, so I didn't save it. Try e.g. <i>top europe over 2.5 tomorrow</i>.");
-  }
-  if (queries.length >= MAX_DAILY) return sendText(chatId, `You already have ${MAX_DAILY} (the max). Remove one first: /daily remove N`);
-  const next = [...queries, a.replace(/\s+/g, " ").slice(0, 200)];
-  const ok = await writeDaily(chatId, next, messageId);
-  return sendText(chatId, ok ? `✅ Saved. It'll be pinned above and sent daily.\n${list(next)}` : "⚠️ Couldn't save that — try again.");
+  const idx = Number(a.match(/(\d+)$/)[1]) - 1;
+  if (idx < 0 || idx >= queries.length) return sendText(chatId, `No #${idx + 1} — you have ${queries.length} saved.`);
+  const next = queries.filter((_, i) => i !== idx);
+  await writeDaily(chatId, next, messageId);
+  return sendText(chatId, `🗑 Removed #${idx + 1}.\n${list(next)}`, { reply_markup: MENU_BTN });
 }
+
+const isAllowed = (chatId) => allowedChatIds().has(String(chatId));
 
 async function handleMessage(msg) {
   const chatId = String(msg.chat.id);
-  if (!allowedChatIds().has(chatId)) {
+  if (!isAllowed(chatId)) {
     // Setup aid: tell a private sender their chat ID; never run anything for them.
     if (msg.chat.type === "private") {
       await sendText(chatId, `🔒 This FootForm bot is private.\nYour chat ID is <code>${esc(chatId)}</code> — if this is you, add it to TELEGRAM_ALLOWED_CHAT_IDS in Vercel and redeploy.`);
@@ -130,43 +81,48 @@ async function handleMessage(msg) {
   }
 
   const text = msg.text.trim();
-  const tz = botTz();
   const deadline = Date.now() + WORK_BUDGET_MS;
   const [first, ...rest] = text.split(/\s+/);
   const cmd = first.startsWith("/") ? first.slice(1).split("@")[0].toLowerCase() : null;
   const arg = rest.join(" ");
 
-  if (cmd === "start" || cmd === "help") return sendText(chatId, helpText());
+  if (cmd === "help") return sendText(chatId, helpText(), { reply_markup: MENU_BTN });
   if (cmd === "daily") return handleDaily(chatId, arg);
-  if (cmd === "now") return runDaily(chatId, tz, { deadline, manual: true });
-  if (cmd) return sendText(chatId, "Unknown command — /help");
+  if (cmd === "now") return runDaily(chatId, { deadline, manual: true });
+  if (cmd === "start" || cmd === "menu" || isMenuIntent(text)) return showMenu(chatId);
+  if (cmd) return sendText(chatId, "Unknown command.", { reply_markup: MENU_BTN });
 
-  // Free text → the model. Post a placeholder, then edit it into the first page.
-  const ack = await sendText(chatId, "⏳ Running the model across the fixtures…");
-  let chunks;
-  try {
-    chunks = formatAsk(await runAsk(text, tz), tz);
-  } catch (e) {
-    chunks = [`⚠️ Something went wrong: ${esc(e.message)}`];
-  }
-  const [head, ...tail] = chunks;
-  const edited = ack && await tg("editMessageText", {
-    chat_id: chatId, message_id: ack.message_id, text: head, parse_mode: "HTML",
-    link_preview_options: { is_disabled: true },
-  });
-  if (!edited) await sendText(chatId, head);
-  await sendChunks(chatId, tail);
+  // Free text → rule parser when it can, Claude (if configured) for the rest.
+  return handleText(chatId, text, msg);
 }
+
+async function handleButton(cq) {
+  const chatId = cq.message?.chat?.id;
+  if (chatId == null || !isAllowed(chatId)) {
+    return tg("answerCallbackQuery", { callback_query_id: cq.id, text: "This bot is private." });
+  }
+  return handleCallback(cq, { deadline: Date.now() + WORK_BUDGET_MS });
+}
+
+// Re-register the webhook once per instance on the first update after a deploy,
+// so new subscriptions (button taps = callback_query) apply immediately instead
+// of waiting for the hourly cron.
+let webhookChecked = false;
 
 router.post("/telegram/webhook", (req, res) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (!secret || !telegramEnabled()) return res.status(503).json({ error: "telegram not configured" });
   if (!safeEqual(req.get("x-telegram-bot-api-secret-token"), secret)) return res.status(401).json({ error: "unauthorized" });
 
-  const msg = req.body?.message;
-  if (msg?.chat?.id != null && typeof msg.text === "string" && !seenUpdate(req.body.update_id)) {
-    waitUntil(handleMessage(msg).catch((e) => console.error(`[telegram] handler: ${e.message}`)));
+  const u = req.body || {};
+  const fresh = !seenUpdate(u.update_id);
+  const log = (e) => console.error(`[telegram] handler: ${e.message}`);
+  if (fresh && u.message?.chat?.id != null && typeof u.message.text === "string") {
+    waitUntil(handleMessage(u.message).catch(log));
+  } else if (fresh && u.callback_query?.id) {
+    waitUntil(handleButton(u.callback_query).catch(log));
   }
+  if (!webhookChecked) { webhookChecked = true; waitUntil(ensureWebhook().catch(log)); }
   res.status(200).json({ ok: true }); // ack now; the work continues in waitUntil
 });
 
@@ -188,7 +144,7 @@ router.get("/cron/telegram-push", async (req, res) => {
   const deadline = started + WORK_BUDGET_MS;
   const results = [];
   for (const chatId of allowedChatIds()) {
-    const sent = await runDaily(chatId, tz, { deadline }).catch((e) => { console.error(`[telegram] push: ${e.message}`); return -1; });
+    const sent = await runDaily(chatId, { deadline }).catch((e) => { console.error(`[telegram] push: ${e.message}`); return -1; });
     results.push({ chat: chatId.slice(-4), sent });
   }
   res.json({ webhook, pushed: results, ms: Date.now() - started });

@@ -8,6 +8,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@vercel/functions": "^3.9.9",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

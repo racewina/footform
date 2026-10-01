@@ -44,11 +44,136 @@ const hasPhrase = (q, phrase) => {
   return new RegExp(`(^|[^a-z0-9])${p}([^a-z0-9]|$)`, "i").test(q);
 };
 
+// ---- Include / exclude filters ---------------------------------------------
+// "exclude friendlies", "without arsenal", "only germany and england",
+// "national league only", "no cups". Each term resolves to a league, country,
+// continent, friendlies, cups, or (fallback) a team name matched against the
+// fixtures at scan time. Clauses are CUT from the query before anything else is
+// parsed, so "exclude national league" can't be read as the league to search.
+
+export const normText = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const DEMONYMS = {
+  english: "England", german: "Germany", spanish: "Spain", italian: "Italy", french: "France",
+  dutch: "Netherlands", holland: "Netherlands", portuguese: "Portugal", scottish: "Scotland",
+  belgian: "Belgium", turkish: "Turkey", brazilian: "Brazil", argentine: "Argentina",
+  argentinian: "Argentina", american: "USA", us: "USA", "united states": "USA", mexican: "Mexico",
+  japanese: "Japan", swedish: "Sweden", norwegian: "Norway", danish: "Denmark", austrian: "Austria",
+  swiss: "Switzerland", greek: "Greece", polish: "Poland", irish: "Ireland", croatian: "Croatia",
+  serbian: "Serbia", czech: "Czech Republic", romanian: "Romania", bulgarian: "Bulgaria",
+  hungarian: "Hungary", finnish: "Finland", icelandic: "Iceland", chinese: "China",
+  korean: "South Korea", "south korean": "South Korea", saudi: "Saudi Arabia", egyptian: "Egypt",
+  colombian: "Colombia", chilean: "Chile", uruguayan: "Uruguay", paraguayan: "Paraguay",
+  ecuadorian: "Ecuador", bolivian: "Bolivia", venezuelan: "Venezuela", canadian: "Canada",
+  cypriot: "Cyprus", slovak: "Slovakia", estonian: "Estonia", "south african": "South Africa",
+};
+const CONTINENT_WORDS = {
+  europe: "Europe", european: "Europe", asia: "Asia", asian: "Asia", africa: "Africa", african: "Africa",
+  "south america": "South America", "south american": "South America", "latin america": "South America",
+  conmebol: "South America", "north america": "North America", "north american": "North America",
+  concacaf: "North America",
+};
+export const CUP_RX = /\b(cup|copa|pokal|coupe|coppa|beker)\b|taça|taca de/i;
+
+const EXCL = "exclude|excluding|except|without|skip|ignore|but not|other than|apart from";
+const INCL = "only|include|including|limited to|restricted to";
+// Query grammar that ends a filter clause (a market, day, odds, count, another clause…).
+const STOP = `odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|to win|win|winner|team to|teams to|to score|goals?|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|\\d|${EXCL}|${INCL}`;
+const CLAUSE_RX = new RegExp(`\\b(${EXCL}|${INCL})\\s+(?!(?:${STOP})\\b)(.+?)(?=[.;!?]|\\s+(?:${STOP})\\b|\\s*$)`, "g");
+const EXCL_RX = new RegExp(`^(?:${EXCL})$`);
+// Single words that stop the backward walk of a postfix "… only".
+const BACK_STOP_RX = new RegExp(`^(?:odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|win|winner|score|goals?|to|in|from|of|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|${EXCL}|${INCL})$|[\\d%+]`);
+
+const cleanTerm = (t) => {
+  let x = t.replace(/["“”‘’()]/g, " ").replace(/\s+/g, " ").trim();
+  for (let i = 0; i < 4; i++) {
+    const y = x.replace(/^(?:the|any|all|games?|matches|fixtures|teams?|clubs?|from|in|of)\s+/, "")
+               .replace(/\s+(?:games?|matches|fixtures|teams?|leagues|clubs?|sides|football|soccer)$/, "");
+    if (y === x) break;
+    x = y;
+  }
+  x = x.trim();
+  return /^(?:the|any|all|games?|matches|fixtures|teams?|clubs?|picks?|tips?|bets?|from|in|of)$/.test(x) ? "" : x;
+};
+
+function resolveFilterTerm(term, leagues) {
+  const n = normText(cleanTerm(term));
+  if (!n || /^[\d.\s%+]+$/.test(n)) return null;
+  if (/^(?:club |international )?friendl(?:y|ies)$/.test(n)) return { kind: "friendlies", label: "friendlies" };
+  if (/^cups?$|^cup (?:games|matches|competitions)$|^domestic cups?$/.test(n)) return { kind: "cups", label: "cups" };
+  if (CONTINENT_WORDS[n]) return { kind: "continent", value: CONTINENT_WORDS[n], label: CONTINENT_WORDS[n] };
+  if (CHAT_SCOPES[0].aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...TOP_EUROPE_IDS], label: "Top Europe" };
+
+  const countries = [...new Set(leagues.map((l) => l.country))];
+  const countryOf = (w) => countries.find((c) => normText(c) === w) || (DEMONYMS[w] && countries.includes(DEMONYMS[w]) ? DEMONYMS[w] : null);
+  const whole = countryOf(n);
+  if (whole) return { kind: "country", value: whole, label: whole };
+
+  // Optional country qualifier: "english premier league" → England's only.
+  let country = null, rest = n;
+  const prefixes = [...countries.map(normText), ...Object.keys(DEMONYMS)].sort((a, b) => b.length - a.length);
+  for (const w of prefixes) {
+    if (n.startsWith(`${w} `) && countryOf(w)) { country = countryOf(w); rest = n.slice(w.length + 1); break; }
+  }
+  const pool = country ? leagues.filter((l) => l.country === country) : leagues;
+  let hits = pool.filter((l) => normText(l.name) === rest);
+  if (!hits.length && rest.length >= 3) {
+    const rx = new RegExp(`\\b${escRx(rest)}\\b`); // whole words: "inter" ≠ "International"
+    hits = pool.filter((l) => rx.test(normText(l.name)));
+  }
+  if (hits.length) {
+    const names = [...new Set(hits.map((l) => l.name))];
+    const label = names.length === 1
+      ? (hits.length > 1 || country ? `${names[0]} (${[...new Set(hits.map((l) => l.country))].join("/")})` : names[0])
+      : names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3}` : "");
+    return { kind: "league", ids: hits.map((l) => String(l.id)), label };
+  }
+  return { kind: "team", value: n, label: `“${cleanTerm(term)}”` };
+}
+
+const splitTerms = (text) => text.split(/\s*(?:,|\/|&|\band\b|\bor\b|\bnor\b)\s*/).map((t) => t.trim()).filter(Boolean);
+
+// → { q: query with the filter clauses cut out, include: [...], exclude: [...] }
+function extractFilters(q, leagues) {
+  const include = [], exclude = [], spans = [];
+  const take = (list, text, start, end) => {
+    const terms = splitTerms(text).map((t) => resolveFilterTerm(t, leagues)).filter(Boolean);
+    if (!terms.length) return; // e.g. "only 5 games" — leave it for the count parser
+    list.push(...terms);
+    spans.push([start, end]);
+  };
+  for (const m of q.matchAll(CLAUSE_RX)) {
+    take(EXCL_RX.test(m[1]) ? exclude : include, m[2], m.index, m.index + m[0].length);
+  }
+  for (const m of q.matchAll(/\bno\s+((?:club |international )?friendl\w*|cups?)\b/g)) {
+    take(exclude, m[1], m.index, m.index + m[0].length);
+  }
+  // Postfix: "national league only", "german teams only" — walk back up to 4 words.
+  for (const m of q.matchAll(new RegExp(`\\bonly\\b(?=\\s*(?:[.;!?,]|$)|\\s+(?:${STOP})\\b)`, "g"))) {
+    const before = q.slice(0, m.index).replace(/\s+$/, "");
+    const words = before.split(" ");
+    const picked = [];
+    while (words.length && picked.length < 4 && words[words.length - 1] && !BACK_STOP_RX.test(words[words.length - 1])) picked.unshift(words.pop());
+    if (picked.length) {
+      const text = picked.join(" ");
+      take(include, text, before.length - text.length, m.index + 4);
+    }
+  }
+  let out = q;
+  for (const [a, b] of spans.sort((x, y) => y[0] - x[0])) out = `${out.slice(0, a)} ${out.slice(b)}`;
+  // Same term twice (e.g. two clauses) → keep one.
+  const dedup = (list) => list.filter((t, i) => list.findIndex((u) => u.label === t.label && u.kind === t.kind) === i);
+  return { q: ` ${out.replace(/\s+/g, " ").trim()} `, include: dedup(include), exclude: dedup(exclude) };
+}
+
 // Parse a free-text query into { markets, scope, leagueId, leagueName, minProb,
 // oddsMin, oddsMax, within, date }. `leagues` is the day's league list
 // [{id,name,country,flag}] so a query can name a specific competition.
 export function parseQuery(raw, leagues = []) {
-  const q = ` ${(raw || "").toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ")} `;
+  const q0 = ` ${(raw || "").toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ")} `;
+  // Include/exclude clauses are cut out first; everything below parses what's left.
+  const { q, include, exclude } = extractFilters(q0, leagues);
 
   // Markets (dedup, first-match-wins order handles over/team families). Detect
   // against `qm`, a copy with odds phrases blanked out, so an odds number that
@@ -85,7 +210,7 @@ export function parseQuery(raw, leagues = []) {
   const pctM = q.match(/(\d{2})\s*(?:%|percent|pct)/);
   if (pctM) minProb = Math.min(95, Math.max(30, Number(pctM[1])));
   else if (hasPhrase(q, "very likely") || hasPhrase(q, "very safe") || hasPhrase(q, "banker")) minProb = 72;
-  else if (hasPhrase(q, "safe") || hasPhrase(q, "strong")) minProb = 65;
+  else if (["safe", "safest", "strong", "strongest"].some((w) => hasPhrase(q, w))) minProb = 65;
   else if (hasPhrase(q, "likely") || hasPhrase(q, "probable")) minProb = 60;
 
   // Odds bounds. Parsed only when the query is actually about odds ("odd(s)",
@@ -174,5 +299,5 @@ export function parseQuery(raw, leagues = []) {
     if (v >= 1 && v <= 60) limit = v;
   }
 
-  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays, limit };
+  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays, limit, include, exclude };
 }
