@@ -10,7 +10,7 @@
 // tapped search and a typed one are answered by exactly the same engine — and
 // the query is shown, which teaches the typed syntax for free.
 
-import { runAsk, toolsPass } from "./fixtures.js";
+import { runAsk, runAcca, toolsPass } from "./fixtures.js";
 import { parseQuery, CHAT_MARKETS, CHAT_SCOPES, normText } from "../services/chatbot.js";
 import { aiEnabled, understand, explain, composeQuery } from "../services/ai.js";
 import { LEAGUES } from "../data/leagues.js";
@@ -28,6 +28,7 @@ const menuText = () => [
   "⚽ <b>FootForm</b> — here's what I can do:",
   "",
   "🔎 <b>Find picks</b> — tap through market › region › day › how many",
+  "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",
   "🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x), Value bets, Europe Strongest",
   "📊 <b>Results</b> — how the slips did (✅/❌ per leg)",
   "🗓 <b>My daily list</b> — searches sent to you every morning",
@@ -36,9 +37,10 @@ const menuText = () => [
     : "✍️ <b>Ask in my own words</b> — type any question instead",
 ].join("\n");
 const MENU_KB = keyboard([
-  [["🔎 Find picks", "fp"], ["🎫 Today's slips", "sl"]],
-  [["📊 Results", "rs"], ["🗓 My daily list", "dl"]],
-  [["✍️ Ask in my own words", "aw"], ["❓ How to ask", "hw"]],
+  [["🔎 Find picks", "fp"], ["🧮 Build an acca", "ac"]],
+  [["🎫 Today's slips", "sl"], ["📊 Results", "rs"]],
+  [["🗓 My daily list", "dl"], ["✍️ Ask in my own words", "aw"]],
+  [["❓ How to ask", "hw"]],
 ]);
 
 const MENU_RX = /^(?:\/?(?:start|menu)|hi+|hello|hey|yo|hiya|help me|options|commands|tasks|main menu|show menu|show me the menu)[!.?\s]*$/;
@@ -58,6 +60,7 @@ export function helpText() {
     "• <i>europe friday and saturday team to score 2+ odds over 1.46</i>",
     "• <i>top europe over 2.5 and btts this weekend above 60%</i>",
     "• <i>btts saturday only germany and england</i> · <i>without arsenal</i>",
+    "• <i>a few games that come to 3+ odds tomorrow</i> · <i>3-leg acca around 5.0, no friendlies</i> (or tap 🧮 Build an acca)",
     "",
     "<b>Markets</b>: over/under 1.5·2.5·3.5, BTTS, to win, double chance, team to score / 2+.",
     "<b>Where</b>: top Europe, a continent, a league or country.",
@@ -289,7 +292,7 @@ const SLIPS = [
 const BACK_TO = (code) => ["⬅️ Back", code];
 const feedQuery = (day, extra = "") => `?date=${ymd(DAY_OFFSET[day])}&tz=${encodeURIComponent(botTz())}${extra}`;
 
-export async function slipsFlow(chatId, messageId, [kind, day]) {
+export async function slipsFlow(chatId, messageId, [kind, day], { title = null } = {}) {
   if (!kind) {
     return editText(chatId, messageId, "🎫 <b>Today's slips</b> — which one?",
       keyboard([...grid(SLIPS.map((x) => [x.label, `sl|${x.code}`]), 2), [BACK_TO("m"), HOME]]));
@@ -307,6 +310,7 @@ export async function slipsFlow(chatId, messageId, [kind, day]) {
   try {
     const d = await apiGet(`${slip.live}${feedQuery(day, slip.extra)}`, { gated: slip.gated });
     chunks = slip.fmt(d, false, label);
+    if (title) chunks[0] = `${title}\n${chunks[0]}`;
   } catch (e) {
     chunks = [`⚠️ Couldn't load ${slip.label}: ${esc(e.message)}`];
   }
@@ -314,7 +318,7 @@ export async function slipsFlow(chatId, messageId, [kind, day]) {
 }
 
 const RESULT_SLIPS = SLIPS.filter((x) => x.results);
-export async function resultsFlow(chatId, messageId, [kind, day]) {
+export async function resultsFlow(chatId, messageId, [kind, day], { title = null } = {}) {
   if (!kind) {
     return editText(chatId, messageId, "📊 <b>Results</b> — which slips?",
       keyboard([...grid(RESULT_SLIPS.map((x) => [x.label, `rs|${x.code}`]), 2), [BACK_TO("m"), HOME]]));
@@ -332,10 +336,85 @@ export async function resultsFlow(chatId, messageId, [kind, day]) {
   try {
     const d = await apiGet(`${slip.results}${feedQuery(day, `${slip.extra || ""}${slip.resultsExtra || ""}`)}`, { gated: slip.gated });
     chunks = slip.fmt(d, true, label);
+    if (title) chunks[0] = `${title}\n${chunks[0]}`;
   } catch (e) {
     chunks = [`⚠️ Couldn't load results: ${esc(e.message)}`];
   }
   return deliver(chatId, messageId, chunks, keyboard([[["📊 Other results", "rs"], HOME]]));
+}
+
+// ---- Custom accumulators -----------------------------------------------------------
+
+const fmtOdds = (x) => Number(x).toFixed(2);
+function formatAcca(r, title = null) {
+  const spec = r.spec || {};
+  const target = `${fmtOdds(spec.target)}${spec.max ? `–${fmtOdds(spec.max)}` : "+"}`;
+  const legsTxt = spec.legs ? `${spec.legs} legs` : spec.maxLegs ? `best chance, max ${spec.maxLegs} legs` : "best chance";
+  const bar = spec.minProb > 55 ? ` · legs ${spec.minProb}%+` : "";
+  const f = r.filters || {};
+  const lines = [
+    ...(title ? [title] : []),
+    `🧮 <b>Acca to ${target}</b> · ${esc(r.date)} · ${legsTxt}${bar}`,
+    `<i>${esc(spec.markets?.length ? spec.markets.join(" + ") : "any market")} · one leg per match · real bookmaker prices</i>`,
+    ...(f.include?.length ? [`Only: ${esc(f.include.join(", "))}`] : []),
+    ...(f.exclude?.length ? [`Excluding: ${esc(f.exclude.join(", "))}`] : []),
+    ...(r.filterNotes || []).map((n) => `⚠️ ${esc(n)}`),
+  ];
+  if (!r.slips?.length) return [`${lines.join("\n")}\n\n${esc(r.note || "Couldn't build that one.")}`];
+  const blocks = r.slips.map((sl, i) => {
+    const legs = sl.legs.map((l) => `   • ${esc(l.selection)} <b>${l.probability}%</b> @${fmtOdds(l.bookOdds)}${l.bookmaker ? ` ${esc(l.bookmaker)}` : ""}\n      ${matchLine(l)}`).join("\n");
+    return `<b>${i ? "Alternative" : "Best chance"}</b> · <b>@${fmtOdds(sl.combinedBookOdds)}</b> · model: ${Math.round(sl.combinedProbability)}% all legs win\n${legs}`;
+  });
+  return chunkLines(lines.join("\n"), blocks);
+}
+
+// Acca legs as match entries, so "why is #2 in there?" can be explained afterwards.
+const accaAsMatches = (r) => (r.slips || []).flatMap((sl) => sl.legs).map((l) => ({
+  ...l, markets: { leg: { selection: l.selection, prob: l.probability, odds: l.bookOdds } },
+}));
+
+// rollToTomorrow: the user named no day — if today has nothing left to build from
+// (late evening), build tomorrow's instead and say so.
+export async function answerAcca(chatId, query, acca, messageId = null, { title = null, rollToTomorrow = false } = {}) {
+  const label = `acca to ${acca.target}${acca.max ? `–${acca.max}` : "+"}${acca.legs ? ` · ${acca.legs} legs` : ""}${query ? ` · ${query}` : ""}`;
+  const id = messageId || (await sendText(chatId, `⏳ Building: <i>${esc(label)}</i>…`))?.message_id;
+  if (messageId) await editText(chatId, messageId, `⏳ Building: <i>${esc(label)}</i>…`);
+  let chunks;
+  try {
+    let r = await runAcca(query, acca, botTz());
+    if (!r.slips?.length && rollToTomorrow && /\btoday\b/.test(query)) {
+      const r2 = await runAcca(query.replace(/\btoday\b/, "tomorrow"), acca, botTz());
+      if (r2.slips?.length) {
+        r = r2;
+        title = `${title ? `${title}\n` : ""}🌙 <i>Nothing left to build from today — here's tomorrow.</i>`;
+      }
+    }
+    if (r.slips?.length) remember(chatId, label, { matches: accaAsMatches(r) });
+    chunks = formatAcca(r, title);
+  } catch (e) {
+    chunks = [`⚠️ Couldn't build that acca: ${esc(e.message)}`];
+  }
+  const markup = keyboard([[["🧮 New acca", "ac"], HOME]]);
+  return id ? deliver(chatId, id, chunks, markup) : sendChunks(chatId, chunks);
+}
+
+const ACCA_TARGETS = [["2", "2.0+"], ["3", "3.0+"], ["5", "5.0+"], ["10", "10+"], ["20", "20+"]];
+const ACCA_LEGS = [["0", "🎯 Best chance"], ["2", "2 legs"], ["3", "3 legs"], ["4", "4 legs"], ["5", "5 legs"]];
+
+async function accaFlow(chatId, messageId, parts) {
+  const [tg_, dy, lg] = parts;
+  if ((tg_ && !find(ACCA_TARGETS, tg_)) || (dy && !find(DAYS, dy)) || (lg && !find(ACCA_LEGS, lg))) return showMenu(chatId, messageId);
+  const crumbs = [tg_ && `target ${find(ACCA_TARGETS, tg_)[1]}`, find(DAYS, dy)?.[1], find(ACCA_LEGS, lg)?.[1]].filter(Boolean);
+  const head = `🧮 <b>Build an acca</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
+  const at = (...p) => ["ac", ...p].join("|");
+  const nav = [["⬅️ Back", parts.length ? at(...parts.slice(0, -1)) : "m"], HOME];
+  if (!tg_) return editText(chatId, messageId, `${head}What combined odds are you after?`, keyboard([ACCA_TARGETS.map(([c, l]) => [l, at(c)]), [HOME]]));
+  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(tg_, c)]), nav]));
+  if (lg == null) {
+    return editText(chatId, messageId, `${head}How many legs? “Best chance” lets me pick the count with the highest chance of landing.`,
+      keyboard([...grid(ACCA_LEGS.map(([c, l]) => [l, at(tg_, dy, c)]), 3), nav]));
+  }
+  return answerAcca(chatId, find(DAYS, dy)[2], { target: Number(tg_), max: 0, legs: Number(lg) }, messageId);
 }
 
 // ---- Daily list -------------------------------------------------------------------
@@ -419,6 +498,7 @@ export async function handleCallback(cq, { deadline }) {
   switch (code) {
     case "m": return showMenu(chatId, messageId);
     case "fp": return builder(chatId, messageId, parts);
+    case "ac": return accaFlow(chatId, messageId, parts);
     case "sl": return slipsFlow(chatId, messageId, parts);
     case "rs": return resultsFlow(chatId, messageId, parts);
     case "dl": return dailyFlow(chatId, messageId, parts, deadline);
@@ -426,7 +506,7 @@ export async function handleCallback(cq, { deadline }) {
     case "aw":
       return editText(chatId, messageId,
         aiEnabled()
-          ? "💬 Just talk to me, e.g.\n• <i>any decent over 2.5 games in Germany this weekend?</i>\n• <i>give me a few safe bankers for tomorrow, no friendlies</i>\n• <i>how did yesterday's VIP do?</i>\nThen follow up: <i>why is #2 in there?</i> · <i>same but Sunday</i> · <i>save that</i>"
+          ? "💬 Just talk to me, e.g.\n• <i>any decent over 2.5 games in Germany this weekend?</i>\n• <i>give me a few safe bankers for tomorrow, no friendlies</i>\n• <i>a few games that come to 3+ odds tomorrow</i>\n• <i>how did yesterday's VIP do?</i>\nThen follow up: <i>why is #2 in there?</i> · <i>same but Sunday</i> · <i>save that</i>"
           : "✍️ Just type your question as a message, e.g.\n• <i>5 games over 2.5 tomorrow exclude friendlies</i>\n• <i>btts saturday only germany and england above 60%</i>\n• <i>team to score 2+ this weekend odds over 1.5</i>",
         keyboard([[["❓ Full guide", "hw"], HOME]]));
     case "sv": {
@@ -447,6 +527,8 @@ export async function handleCallback(cq, { deadline }) {
 const FOLLOWUP_RX = /^(?:why|explain|how come|what about|how about|same\b|instead|compare|which (?:one|of)|is (?:it|that|this|the)\b|are (?:they|these|those)\b|should i|tell me|more (?:on|about)|what do you think|thoughts|save (?:that|this|it)\b)/i;
 const DAILY_TITLE_RX = /^🗓 Daily \d+: (.+)$/;
 const SLIP_CODE = { vip: "vip", safe: "sf", blend: "bb", blend_high: "bh", value: "vb", europe: "eu" };
+const SLIP_NAME = { vip: "VIP slips", sf: "Safe accumulators", bb: "Blend 3–10x", bh: "Blend 10–50x", vb: "Value bets", eu: "Europe Strongest" };
+
 
 const nowLabel = () => new Intl.DateTimeFormat("en-US", { timeZone: botTz(), weekday: "long", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) + ` (${botTz()})`;
 const resultLine = (m, i) => `${i + 1}. ${m.home} v ${m.away} · ${m.league} · ${m.kickoffLabel} · ${Object.values(m.markets || {}).map((l) => `${l.selection} ${l.prob}%${l.odds != null ? ` @${l.odds}` : ""}`).join(", ")}`;
@@ -484,6 +566,20 @@ async function aiReply(chatId, text, msg) {
         if (!q || !parseQuery(q, LEAGUES).markets.length) return say(`${esc(u.reply || "I couldn't turn that into a search.")}\n\nOr tap your way there:`);
         return answerQuery(chatId, q, id, { title: `🧠 <i>Understood as:</i> ${esc(q)}` });
       }
+      case "acca": {
+        if (!u.acca) return say(`${esc(u.reply || "What combined odds are you after?")}\n\nOr tap your way there:`, keyboard([[["🧮 Build an acca", "ac"], HOME]]));
+        const scopeQ = composeQuery(u.search, { allowNoMarket: true }) || "today";
+        const acca = {
+          target: Math.round(Number(u.acca.target_odds) * 100) / 100,
+          max: Number(u.acca.max_odds) > Number(u.acca.target_odds) ? Math.round(Number(u.acca.max_odds) * 100) / 100 : 0,
+          legs: Math.max(0, Math.min(12, Math.round(Number(u.acca.legs) || 0))),
+          maxLegs: Math.max(0, Math.min(12, Math.round(Number(u.acca.max_legs) || 0))),
+        };
+        const count = acca.legs ? `${acca.legs} legs` : acca.maxLegs ? `best chance, max ${acca.maxLegs} legs` : "best chance";
+        const desc = `acca to ${acca.target}${acca.max ? `–${acca.max}` : "+"} · ${count} · ${scopeQ}`;
+        const dayless = !(u.search?.days || []).length;
+        return answerAcca(chatId, scopeQ, acca, id, { title: `🧠 <i>Understood as:</i> ${esc(desc)}`, rollToTomorrow: dayless });
+      }
       case "save_daily": {
         const q = composeQuery(u.search) || mem?.query;
         return say(q ? await addDaily(chatId, q) : "Which search should I save? Run one first, then say “save that”.",
@@ -500,12 +596,14 @@ async function aiReply(chatId, text, msg) {
       }
       case "slips": {
         const code = SLIP_CODE[u.slip?.kind] || "vip";
-        return slipsFlow(chatId, id, [code, u.slip?.day === "tomorrow" ? "tm" : "t"]);
+        const day = u.slip?.day === "tomorrow" ? "tm" : "t";
+        return slipsFlow(chatId, id, [code, day], { title: `🧠 <i>Understood as:</i> ${SLIP_NAME[code]} for ${day === "tm" ? "tomorrow" : "today"}` });
       }
       case "results": {
         if (u.slip?.kind === "value") return say("Value bets aren't graded here — results cover VIP, Safe, Blend and Europe Strongest.", keyboard([[["📊 Results", "rs"], HOME]]));
         const code = SLIP_CODE[u.slip?.kind] || "vip";
-        return resultsFlow(chatId, id, [code, u.slip?.day === "today" ? "t" : "y"]);
+        const day = u.slip?.day === "today" ? "t" : "y";
+        return resultsFlow(chatId, id, [code, day], { title: `🧠 <i>Understood as:</i> ${SLIP_NAME[code]} results for ${day === "t" ? "today" : "yesterday"}` });
       }
       case "menu":
         return showMenu(chatId, id);

@@ -2825,28 +2825,16 @@ function evalChatMarket(key, m, home, away) {
   }
 }
 
-// Chatbot: a natural-language query is parsed (services/chatbot.js) into markets
-// + scope + filters, then run through the SAME prediction engine the tools use —
-// every fixture where ALL requested markets clear the probability (and optional
-// odds) bar, priced on real bookmaker odds. Public, no external LLM. Shared by
-// GET /ask (the web chatbot) and the Telegram bot, so both answer identically.
-export async function runAsk(rawQ, tz) {
-  const q = String(rawQ || "").trim().slice(0, 300);
+// ---- Shared by runAsk (searches) and runAcca (custom accumulators) ---------------
 
-  const params = parseQuery(q, LEAGUES);
-  const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
-  if (!params.markets.length) {
-    return { query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." };
-  }
-
+// The parser's day tokens → concrete dates in the caller's timezone + a label.
+// A weekday name → its next occurrence (today if it's that day); "weekend" → the
+// upcoming Sat+Sun (just Sunday if today is already Sunday).
+function resolveAskDays(params, tz) {
   const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
   const today = formatDate(new Date(), tz);
   const todayDow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun … 6=Sat
   const DOW = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
-
-  // Resolve ONE day token → { dates:[…], label }. A weekday name → its next
-  // upcoming occurrence (today if it's that day). "weekend" → the upcoming
-  // Sat+Sun (just Sunday if today is already Sunday).
   const resolveDay = (tok) => {
     if (tok === "tomorrow") return { dates: [shiftN(today, 1)], label: "tomorrow" };
     if (tok === "weekend") {
@@ -2861,17 +2849,23 @@ export async function runAsk(rawQ, tz) {
     }
     return { dates: [today], label: "today" };
   };
-
   // Union every requested day, dedup + sort dates, join the labels.
   const dayTokens = Array.isArray(params.days) && params.days.length ? params.days : [params.date || "today"];
   const resolved = dayTokens.map(resolveDay);
-  const targetDates = [...new Set(resolved.flatMap((r) => r.dates))].sort();
-  const dateLabel = [...new Set(resolved.map((r) => r.label))].join(" & ");
+  return {
+    today,
+    targetDates: [...new Set(resolved.flatMap((r) => r.dates))].sort(),
+    dateLabel: [...new Set(resolved.map((r) => r.label))].join(" & "),
+  };
+}
 
-  // Include/exclude filters (see chatbot.js extractFilters). League-level terms
-  // (league/country/continent/friendlies/cups) prune whole leagues BEFORE the
-  // scan; team terms are matched per fixture. Include = keep if ANY include term
-  // matches; exclude = drop if ANY exclude term matches.
+// Scope + include/exclude filters (see chatbot.js extractFilters). League-level
+// terms (league/country/continent/friendlies/cups) prune whole leagues BEFORE the
+// scan; team terms are matched per fixture. Include = keep if ANY include term
+// matches; exclude = drop if ANY exclude term matches.
+// betSafe (accumulators): also bar NO_BET leagues/countries and friendlies, like
+// every other bet engine — unless the user explicitly asked for friendlies.
+function askScope(params, tz, { betSafe = false } = {}) {
   const inc = params.include || [], exc = params.exclude || [];
   const filterSig = [...inc.map((t) => `+${t.kind}:${t.ids?.join(".") || t.value || ""}`), ...exc.map((t) => `-${t.kind}:${t.ids?.join(".") || t.value || ""}`)].join(",");
   const leagueHit = (t, lg) => {
@@ -2888,9 +2882,74 @@ export async function runAsk(rawQ, tz) {
   const teamRx = new Map([...inc, ...exc].filter((t) => t.kind === "team").map((t) => [t.value, new RegExp(`\\b${t.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`)]));
   const teamHit = (t, fx) => teamRx.get(t.value).test(normText(fx.homeTeam.name)) || teamRx.get(t.value).test(normText(fx.awayTeam.name));
   const incHasTeam = inc.some((t) => t.kind === "team");
+  const wantsFriendlies = inc.some((t) => t.kind === "friendlies");
   const matchedTeamTerms = new Set();
 
-  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${filterSig}`;
+  const leagueIdsFor = async (targetDate) => {
+    let leagueIds;
+    if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
+    else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
+    else {
+      const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
+      if (params.scope === "all") leagueIds = all;
+      else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
+    }
+    return leagueIds.filter((id) => {
+      const lg = LEAGUES_BY_ID[id];
+      if (betSafe && lg && (NO_BET_COUNTRIES.has(lg.country) || NO_BET_LEAGUES.has(String(id)) || (!wantsFriendlies && (lg.friendly || /friendl/i.test(lg.name))))) return false;
+      if (exc.some((t) => leagueHit(t, lg))) return false;
+      // With only league-level includes we can skip non-matching leagues outright.
+      if (inc.length && !incHasTeam && !inc.some((t) => leagueHit(t, lg))) return false;
+      return true;
+    });
+  };
+
+  const keepFixture = (fx, g) => {
+    if (teamRx.size) for (const [v] of teamRx) if (teamHit({ value: v }, fx)) matchedTeamTerms.add(v);
+    if (exc.some((t) => t.kind === "team" && teamHit(t, fx))) return false;
+    if (inc.length && !inc.some((t) => (t.kind === "team" ? teamHit(t, fx) : leagueHit(t, LEAGUES_BY_ID[g.league?.id] || g.league)))) return false;
+    return true;
+  };
+
+  // A team term that matched no fixture at all is almost always a typo or a
+  // nickname ("man utd") — say so rather than silently returning nothing.
+  const filterNotes = () => [...inc, ...exc]
+    .filter((t) => t.kind === "team" && !matchedTeamTerms.has(t.value))
+    .map((t) => `${t.label} didn't match any team, league or country in the fixtures scanned.`);
+
+  return { filterSig, leagueIdsFor, keepFixture, filterNotes, filters: { include: inc.map((t) => t.label), exclude: exc.map((t) => t.label) } };
+}
+
+// Compact model snapshot so a follow-up ("why this one?") can be explained from the
+// same numbers that selected it.
+function modelSnapshot(fx) {
+  const pr = fx.prediction || {}, m = pr.markets || {};
+  return {
+    home: pr.home, draw: pr.draw, away: pr.away,
+    homeForm: (pr.homeForm || []).join(""), awayForm: (pr.awayForm || []).join(""),
+    homeGoalsFor: pr.homeGoalsFor, homeGoalsAgainst: pr.homeGoalsAgainst,
+    awayGoalsFor: pr.awayGoalsFor, awayGoalsAgainst: pr.awayGoalsAgainst,
+    xgHome: m.xgHome, xgAway: m.xgAway, over25: m.over25, btts: m.btts,
+  };
+}
+
+// Natural-language query → every fixture where ALL requested markets clear the
+// probability (and optional odds) bar, priced on real bookmaker odds. Public, no
+// external LLM. Shared by GET /ask (the web chatbot) and the Telegram bot, so both
+// answer identically.
+export async function runAsk(rawQ, tz) {
+  const q = String(rawQ || "").trim().slice(0, 300);
+
+  const params = parseQuery(q, LEAGUES);
+  const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
+  if (!params.markets.length) {
+    return { query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." };
+  }
+
+  const { today, targetDates, dateLabel } = resolveAskDays(params, tz);
+  const scope = askScope(params, tz);
+
+  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
   // The count ("5 games") isn't in the key: the full ranked list is cached once and
   // cut to N on the way out, so "5 games" and "10 games" share one scan. The
   // caller's own query/params replace the cached ones (same filters by key).
@@ -2907,22 +2966,7 @@ export async function runAsk(rawQ, tz) {
   // Scan a single date: resolve its leagues, build each league-day, collect the
   // fixtures that clear every requested market's probability + odds bar.
   const scanDate = async (targetDate) => {
-    let leagueIds;
-    if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
-    else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
-    else {
-      const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
-      if (params.scope === "all") leagueIds = all;
-      else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
-    }
-    leagueIds = leagueIds.filter((id) => {
-      const lg = LEAGUES_BY_ID[id];
-      if (exc.some((t) => leagueHit(t, lg))) return false;
-      // With only league-level includes we can skip non-matching leagues outright.
-      if (inc.length && !incHasTeam && !inc.some((t) => leagueHit(t, lg))) return false;
-      return true;
-    });
-
+    const leagueIds = await scope.leagueIdsFor(targetDate);
     const isToday = targetDate === today;
     const windowed = params.within !== "all" && isToday;
     const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
@@ -2937,10 +2981,7 @@ export async function runAsk(rawQ, tz) {
         const m = fx.prediction?.markets;
         if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
         const home = fx.homeTeam.name, away = fx.awayTeam.name;
-
-        if (teamRx.size) for (const [v] of teamRx) if (teamHit({ value: v }, fx)) matchedTeamTerms.add(v);
-        if (exc.some((t) => t.kind === "team" && teamHit(t, fx))) continue;
-        if (inc.length && !inc.some((t) => (t.kind === "team" ? teamHit(t, fx) : leagueHit(t, LEAGUES_BY_ID[g.league?.id] || g.league)))) continue;
+        if (!scope.keepFixture(fx, g)) continue;
 
         const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
         if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
@@ -2961,17 +3002,7 @@ export async function runAsk(rawQ, tz) {
         if (!ok) continue;
 
         const score = Math.round(params.markets.reduce((s, k) => s + priced[k].prob, 0) / params.markets.length);
-        // Compact model snapshot so a follow-up ("why this one?") can be explained
-        // from the same numbers that selected it.
-        const pr = fx.prediction || {};
-        const model = {
-          home: pr.home, draw: pr.draw, away: pr.away,
-          homeForm: (pr.homeForm || []).join(""), awayForm: (pr.awayForm || []).join(""),
-          homeGoalsFor: pr.homeGoalsFor, homeGoalsAgainst: pr.homeGoalsAgainst,
-          awayGoalsFor: pr.awayGoalsFor, awayGoalsAgainst: pr.awayGoalsAgainst,
-          xgHome: m.xgHome, xgAway: m.xgAway, over25: m.over25, btts: m.btts,
-        };
-        out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced, model });
+        out.push({ matchId: fx.id, leagueId: g.league?.id, league: g.league?.name, leagueFlag: g.league?.flag, home, away, kickoff: fx.startTimestamp, status: fx.status, date: targetDate, score, markets: priced, model: modelSnapshot(fx) });
       }
     }
     return { leaguesScanned: leagueIds.length, matches: out };
@@ -2981,15 +3012,171 @@ export async function runAsk(rawQ, tz) {
   const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
   const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
 
-  // A team term that matched no fixture at all is almost always a typo or a
-  // nickname ("man utd") — say so rather than silently returning nothing.
-  const filterNotes = [...inc, ...exc]
-    .filter((t) => t.kind === "team" && !matchedTeamTerms.has(t.value))
-    .map((t) => `${t.label} didn't match any team, league or country in the fixtures scanned.`);
-  const filters = { include: inc.map((t) => t.label), exclude: exc.map((t) => t.label) };
-  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60), filters, filterNotes };
+  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60), filters: scope.filters, filterNotes: scope.filterNotes() };
   cacheSet(cacheKey, result, TTL.FIXTURES);
   return shape(result, false);
+}
+
+// ---- Custom accumulators -----------------------------------------------------------
+//
+// "a few games that add up to 3+ odds tomorrow" → one leg per match (the safest
+// selection the books actually price), stacked to reach the target COMBINED BOOK
+// odds. Days / region / filters / markets come from the same parser as runAsk; no
+// markets named = any market Blend draws from. Same leg floor as Blend (book odds
+// ≥ 1.20), only not-yet-started matches, and bet-safe scoping (no friendlies / no-bet
+// leagues unless asked).
+
+const ACCA_MIN_LEG = BLEND_MIN_BOOK;
+const ACCA_SHORTLIST = 40;
+
+// Choose one leg per match so the combined book odds land in [lo, hi] with the
+// HIGHEST joint model probability — solved exactly (dynamic programming over the
+// strongest matches), not greedily. `pool` holds every priced candidate per match
+// ("to score @1.20" and "2+ goals @1.80" for the same game); legs = N fixes the
+// count, legs = 0 lets the optimiser pick whatever count gives the best chance.
+// State = (legs used, combined log-odds in 0.01 buckets); above the target the
+// odds are capped (when there's no ceiling) so equivalent states merge.
+function pickAccaLegs(pool, { lo, hi, legs, maxLegs: legCap = 0 }) {
+  const byMatch = new Map();
+  for (const l of pool) {
+    if (!byMatch.has(l.matchId)) byMatch.set(l.matchId, []);
+    byMatch.get(l.matchId).push(l);
+  }
+  const matches = [...byMatch.values()]
+    .map((ls) => ls.sort((a, b) => b.probability - a.probability))
+    .sort((a, b) => b[0].probability - a[0].probability)
+    .slice(0, 25);
+  const target = Math.log(lo), ceil = hi ? Math.log(hi) : Infinity, cap = hi ? ceil : target;
+  const maxLegs = legs || legCap || 12, B = 0.01; // exact count, else "no more than" cap, else free
+
+  let dp = new Map([["0|0", { lp: 0, sum: 0, picks: [] }]]);
+  for (const cands of matches) {
+    const next = new Map(dp); // skipping this match is always allowed
+    for (const [key, st] of dp) {
+      const k = Number(key.slice(0, key.indexOf("|")));
+      if (k >= maxLegs) continue;
+      for (const l of cands) {
+        const sum = st.sum + Math.log(l.bookOdds);
+        if (sum > ceil + 1e-9) continue;
+        const nk = `${k + 1}|${Math.round(Math.min(sum, cap) / B)}`;
+        const lp = st.lp + Math.log(l.probability / 100);
+        const cur = next.get(nk);
+        if (!cur || lp > cur.lp) next.set(nk, { lp, sum, picks: [...st.picks, l] });
+      }
+    }
+    dp = next;
+  }
+  let best = null;
+  for (const st of dp.values()) {
+    if (!st.picks.length || (legs && st.picks.length !== legs)) continue;
+    if (st.sum < target - 1e-9 || st.sum > ceil + 1e-9) continue;
+    if (!best || st.lp > best.lp) best = st;
+  }
+  return best ? best.picks : null;
+}
+
+const accaSlip = (legs) => {
+  const round2 = (x) => Math.round(x * 100) / 100;
+  const book = legs.reduce((p, l) => p * l.bookOdds, 1);
+  const fair = legs.reduce((p, l) => p * (100 / l.probability), 1);
+  const prob = legs.reduce((p, l) => p * (l.probability / 100), 1);
+  return {
+    legs: [...legs].sort((a, b) => a.kickoff - b.kickoff),
+    legCount: legs.length,
+    combinedBookOdds: round2(book),
+    combinedFairOdds: round2(fair),
+    combinedProbability: round2(prob * 100),
+  };
+};
+
+// q = plain-English scope (days/region/filters/markets/bar); acca = { target, max, legs }.
+export async function runAcca(rawQ, acca, tz) {
+  const q = String(rawQ || "").trim().slice(0, 300);
+  const params = parseQuery(q, LEAGUES);
+  const lo = Math.max(1.1, Math.min(1000, Number(acca?.target) || 3));
+  const hiRaw = Number(acca?.max) || 0;
+  const hi = hiRaw > lo ? Math.min(5000, hiRaw) : null;
+  const legs = Math.max(0, Math.min(12, Math.round(Number(acca?.legs) || 0)));
+  const maxLegs = legs ? 0 : Math.max(0, Math.min(12, Math.round(Number(acca?.maxLegs) || 0))); // "not more than N"
+  const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
+
+  const { targetDates, dateLabel } = resolveAskDays(params, tz);
+  const scope = askScope(params, tz, { betSafe: true });
+  const spec = { target: lo, max: hi, legs, maxLegs, minProb: params.minProb, markets: marketLabels };
+  const cacheKey = `acca:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${lo}-${hi || ""}:${legs}:${maxLegs}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return { ...cached, query: q, fromCache: true };
+
+  // 1) Candidate legs per not-yet-started fixture (model only, no odds calls yet).
+  const ranked = [];
+  let leaguesScanned = 0;
+  for (const targetDate of targetDates) {
+    const leagueIds = await scope.leagueIdsFor(targetDate);
+    leaguesScanned += leagueIds.length;
+    const groups = await Promise.all(leagueIds.map((id) => buildLeagueDay(id, targetDate, tz).catch(() => null)));
+    for (const g of groups) {
+      if (!g?.fixtures?.length) continue;
+      for (const fx of g.fixtures) {
+        const m = fx.prediction?.markets;
+        if (fx.status !== "notstarted" || !m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
+        if (!scope.keepFixture(fx, g)) continue;
+        const home = fx.homeTeam.name, away = fx.awayTeam.name;
+        const cands = params.markets.length
+          ? params.markets.map((k) => evalChatMarket(k, m, home, away)).filter((e) => e?.marketKey).map((e) => ({ marketKey: e.marketKey, selection: e.selection, prob: e.prob, market: e.selection }))
+          : blendCandidates(fx);
+        const usable = cands.filter((c) => c.prob >= params.minProb);
+        if (usable.length) ranked.push({ g, fx, cands: usable, top: Math.max(...usable.map((c) => c.prob)) });
+      }
+    }
+  }
+
+  // 2) Price the strongest fixtures; keep the safest priced leg per match.
+  ranked.sort((a, b) => b.top - a.top);
+  const pool = [];
+  for (const { g, fx, cands } of ranked.slice(0, ACCA_SHORTLIST)) {
+    const odds = await getFixtureOdds(fx.id).catch(() => null);
+    if (!odds?.best) continue;
+    const model = modelSnapshot(fx);
+    for (const c of cands) {
+      const priced = bestBookOddsForLeg(odds.best, { marketKey: c.marketKey, selection: c.selection }, fx.prediction?.markets?.winner);
+      if (!priced || priced.odds < ACCA_MIN_LEG) continue;
+      pool.push({
+        matchId: fx.id, leagueId: g.league?.id, home: fx.homeTeam.name, away: fx.awayTeam.name,
+        league: g.league?.name, leagueFlag: g.league?.flag, kickoff: fx.startTimestamp,
+        market: c.market, marketKey: c.marketKey, selection: c.selection,
+        probability: Math.round(c.prob), bookOdds: priced.odds, bookmaker: priced.book, model,
+      });
+    }
+  }
+
+  // 3) Main slip + one alternative built from the legs that are left.
+  const slips = [];
+  const first = pickAccaLegs(pool, { lo, hi, legs, maxLegs });
+  if (first) {
+    slips.push(accaSlip(first));
+    const used = new Set(first.map((l) => l.matchId));
+    const rest = pool.filter((l) => !used.has(l.matchId));
+    const second = pickAccaLegs(rest, { lo, hi, legs, maxLegs });
+    if (second) slips.push(accaSlip(second));
+  }
+
+  let note = null;
+  if (!slips.length) {
+    // Highest product reachable with one leg per match (each match's longest leg).
+    const longest = new Map();
+    for (const l of pool) if (!longest.has(l.matchId) || l.bookOdds > longest.get(l.matchId)) longest.set(l.matchId, l.bookOdds);
+    const maxReach = [...longest.values()].sort((x, y) => y - x).slice(0, legs || maxLegs || longest.size).reduce((p, o) => p * o, 1);
+    const matches = longest.size;
+    note = !pool.length
+      ? `No priced legs ${dateLabel} for that${scope.filters.include.length ? " filter" : ""}. Accas leave out friendlies and your no-bet leagues (say “friendlies only” to build from friendlies) — try another day, market or region.`
+      : legs && pool.length < legs
+        ? `Only ${pool.length} priced leg${pool.length === 1 ? "" : "s"} available ${dateLabel} — ask for fewer legs or another day.`
+        : `Couldn't reach ${lo}${hi ? `–${hi}` : "+"} with ${legs ? `${legs} legs` : maxLegs ? `at most ${maxLegs} legs` : "the available legs"}${params.minProb > 55 ? ` of ${params.minProb}%+` : ""} ${dateLabel} (${matches} priced matches; the most they reach is @${maxReach.toFixed(2)}). Try a lower target${legs ? " or more legs" : ""}.`;
+  }
+
+  const result = { query: q, spec, date: dateLabel, dates: targetDates, leaguesScanned, poolSize: new Set(pool.map((l) => l.matchId)).size, slips, note, filters: scope.filters, filterNotes: scope.filterNotes() };
+  cacheSet(cacheKey, result, TTL.FIXTURES);
+  return { ...result, fromCache: false };
 }
 
 router.get("/ask", async (req, res) => {
