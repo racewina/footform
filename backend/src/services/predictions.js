@@ -204,6 +204,39 @@ function marketsFromGoals(lambdaHome, lambdaAway) {
   };
 }
 
+// Post-hoc calibration of the goal markets — Platt scaling on the logit,
+// p' = σ(a·logit(p) + b). Fitted 2026-10-13 on 5,908 finished matches (every
+// covered league, 2026-08-29 → 10-12) using leak-free pre-kickoff predictions.
+// The Poisson grid is right on average but overconfident at the extremes — BTTS
+// called ≥65% landed 59.4% (predicted 69.1), away 2+ ≥65% landed 62.3% (69.4).
+// Out of sample (fit on the older 30 days, scored on the newest 14) it cut the
+// 8 goal markets' log loss 4.901 → 4.883 and lifted 50%-call accuracy 66.4% →
+// 66.6%; the coefficients were stable across both windows. 1X2 / double chance
+// are deliberately untouched (already calibrated; DC must stay home+draw etc.).
+// computePrediction(…, { calibrate: false }) returns the raw grid for re-fitting.
+const GOAL_CALIBRATION = {
+  home1Plus: [0.714, 0.347], away1Plus: [0.742, 0.239],
+  home2Plus: [0.954, -0.019], away2Plus: [0.745, -0.128],
+  over15: [0.717, 0.337], over25: [0.747, 0.089], over35: [0.768, -0.133],
+  btts: [0.486, 0.081],
+};
+function calibrateGoalMarkets(m) {
+  const out = { ...m };
+  for (const [k, [a, b]] of Object.entries(GOAL_CALIBRATION)) {
+    if (typeof m[k] !== "number") continue;
+    const p = clamp(m[k] / 100, 0.005, 0.995);
+    out[k] = Math.round(100 / (1 + Math.exp(-(a * Math.log(p / (1 - p)) + b))));
+  }
+  // Keep nested markets coherent: a 2+ can't beat its 1+, a higher line can't beat
+  // a lower one, and both teams scoring can't beat either team scoring.
+  out.home2Plus = Math.min(out.home2Plus, out.home1Plus);
+  out.away2Plus = Math.min(out.away2Plus, out.away1Plus);
+  out.over25 = Math.min(out.over25, out.over15);
+  out.over35 = Math.min(out.over35, out.over25);
+  out.btts = Math.min(out.btts, out.home1Plus, out.away1Plus);
+  return out;
+}
+
 function parseFormFromEvents(events, teamId, limit = FORM_WINDOW) {
   // Provider order isn't guaranteed; sort most-recent-first so we take the
   // genuine last N, not the oldest N.
@@ -315,7 +348,9 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
   lambdaHome = clamp(lambdaHome, 0.2, 4);
   lambdaAway = clamp(lambdaAway, 0.2, 4);
 
-  const { probs, markets } = marketsFromGoals(lambdaHome, lambdaAway);
+  const grid = marketsFromGoals(lambdaHome, lambdaAway);
+  const probs = grid.probs;
+  const markets = opts.calibrate === false ? grid.markets : calibrateGoalMarkets(grid.markets);
 
   const totalGames = homeStats.gamesPlayed + awayStats.gamesPlayed;
   const confidence = totalGames >= 8 ? "high" : totalGames >= 4 ? "medium" : "low";
@@ -333,7 +368,7 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
   };
 }
 
-export { parseFormFromEvents };
+export { parseFormFromEvents, marketsFromGoals };
 
 // Blend a model prediction with the bookmaker market. The market prices in team
 // quality, injuries and news the form/Elo model can't see, so a modest blend

@@ -706,7 +706,10 @@ async function buildLeagueDayAny(leagueId, targetDate, tz) {
 // events a single time (getLeaguePastEvents is cached) and buckets matches by
 // day locally, so a 14- or 30-day summary costs roughly the same upstream as a
 // single day. Returns { perDay: {date -> [grades]}, grades: [all grades] }.
-async function buildLeagueWindow(leagueId, dateSet, tz) {
+// Leak-free model predictions for a league's finished matches in a date window:
+// each team's form and Elo exactly as they stood before kickoff. The shared core
+// of the record/backtest views (buildLeagueWindow) and the calibration study.
+export async function predictLeagueWindow(leagueId, dateSet, tz, { calibrate = true } = {}) {
   const league = LEAGUES_BY_ID[leagueId];
   if (!league) return null;
 
@@ -721,7 +724,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     if (e.homeScore?.current == null || e.awayScore?.current == null) return false;
     return dateSet.has(formatDate(new Date(e.startTimestamp * 1000), tz));
   });
-  if (!inWindow.length) return { perDay: {}, grades: [] };
+  if (!inWindow.length) return { league, rows: [] };
 
   const eventsMap = await getEventsForTeams(
     inWindow.flatMap((e) => [e.homeTeam?.id, e.awayTeam?.id])
@@ -729,8 +732,7 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
   const elo = await getLeagueElo(leagueId, season.id).catch(() => null);
   const baselines = await getLeagueBaselines(leagueId, season.id).catch(() => null);
 
-  const perDay = {};
-  const grades = [];
+  const rows = [];
   for (const e of inWindow) {
     const homeId = e.homeTeam?.id;
     const awayId = e.awayTeam?.id;
@@ -741,15 +743,27 @@ async function buildLeagueWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp), calibrate });
     if (!prediction.markets) continue;
+    rows.push({
+      event: e, prediction,
+      homeScore: e.homeScore.current, awayScore: e.awayScore.current,
+      day: formatDate(new Date(e.startTimestamp * 1000), tz),
+    });
+  }
+  return { league, rows };
+}
 
-    const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
-    const day = formatDate(new Date(e.startTimestamp * 1000), tz);
-    (perDay[day] ||= []).push(grade);
+async function buildLeagueWindow(leagueId, dateSet, tz) {
+  const r = await predictLeagueWindow(leagueId, dateSet, tz);
+  if (!r) return null;
+  const perDay = {};
+  const grades = [];
+  for (const row of r.rows) {
+    const grade = gradeMatch(row.prediction.markets, row.homeScore, row.awayScore);
+    (perDay[row.day] ||= []).push(grade);
     grades.push(grade);
   }
-
   return { perDay, grades };
 }
 

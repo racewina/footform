@@ -20,6 +20,13 @@ import {
 } from "../services/telegram.js";
 
 const HOME = ["🏠 Menu", "m"];
+
+// Value bets is switched off (2026-10-13): rebuilt for Oct 6–12 at real bookmaker odds,
+// its 1,558 picks won 37.4% vs the 40.2% the prices implied — ROI −9.3%, and bigger
+// claimed edges did no better (the "edges" were noise). Flip to re-enable once a model
+// shows a real edge at bookmaker prices. The /api/value feed itself is untouched.
+const VALUE_BETS_ENABLED = false;
+const VALUE_OFF_MSG = "📉 Value bets is switched off. Rebuilt for last week at real bookmaker prices, its picks lost about 9% of stake and the claimed edges didn't hold up — so I won't recommend them. Try 🧮 Build an acca or the slips instead.";
 const hoursLabel = () => pushHours().map((h) => `${String(h).padStart(2, "0")}:00`).join(", ");
 
 // ---- Main menu ----------------------------------------------------------------
@@ -29,7 +36,7 @@ const menuText = () => [
   "",
   "🔎 <b>Find picks</b> — tap through market › region › day › how many",
   "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",
-  "🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x), Value bets, Europe Strongest",
+  `🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x)${VALUE_BETS_ENABLED ? ", Value bets" : ""}, Europe Strongest`,
   "📊 <b>Results</b> — how the slips did (✅/❌ per leg)",
   "🗓 <b>My daily list</b> — searches sent to you every morning",
   aiEnabled()
@@ -295,7 +302,7 @@ function fmtBlend(d, graded, dayLabel, title) {
 
 // code → label, live path, results path (null = not graded), formatter, extra
 // query, and whether the feed is behind the tools code.
-const SLIPS = [
+const ALL_SLIPS = [
   { code: "vip", label: "👑 VIP slips", live: "/vip", results: "/vip/results", fmt: fmtVip },
   { code: "sf", label: "🛡 Safe accumulators", live: "/accumulators", results: "/accumulators/results", fmt: fmtSafe },
   { code: "bb", label: "🧪 Blend 3–10x", live: "/blend-bets", results: "/blend-bets/results", gated: true,
@@ -305,6 +312,7 @@ const SLIPS = [
   { code: "vb", label: "💎 Value bets", live: "/value", results: null, fmt: (d, _g, lbl) => fmtValue(d, lbl) },
   { code: "eu", label: "🇪🇺 Europe Strongest", live: "/europe-strongest", results: "/europe-strongest", resultsExtra: "&includeFinished=1", fmt: fmtEurope },
 ];
+const SLIPS = ALL_SLIPS.filter((x) => x.code !== "vb" || VALUE_BETS_ENABLED);
 const BACK_TO = (code) => ["⬅️ Back", code];
 const feedQuery = (day, extra = "") => `?date=${ymd(DAY_OFFSET[day])}&tz=${encodeURIComponent(botTz())}${extra}`;
 
@@ -619,12 +627,13 @@ async function aiReply(chatId, text, msg) {
         return say(`💬 ${esc(answer)}`, keyboard([[["🔎 New search", "fp"], HOME]]));
       }
       case "slips": {
+        if (u.slip?.kind === "value" && !VALUE_BETS_ENABLED) return say(VALUE_OFF_MSG, keyboard([[["🧮 Build an acca", "ac"], ["🎫 Slips", "sl"]], [HOME]]));
         const code = SLIP_CODE[u.slip?.kind] || "vip";
         const day = u.slip?.day === "tomorrow" ? "tm" : "t";
         return slipsFlow(chatId, id, [code, day], { title: `🧠 <i>Understood as:</i> ${SLIP_NAME[code]} for ${day === "tm" ? "tomorrow" : "today"}` });
       }
       case "results": {
-        if (u.slip?.kind === "value") return say("Value bets aren't graded here — results cover VIP, Safe, Blend and Europe Strongest.", keyboard([[["📊 Results", "rs"], HOME]]));
+        if (u.slip?.kind === "value") return say(VALUE_BETS_ENABLED ? "Value bets aren't graded here — results cover VIP, Safe, Blend and Europe Strongest." : VALUE_OFF_MSG, keyboard([[["📊 Results", "rs"], HOME]]));
         const code = SLIP_CODE[u.slip?.kind] || "vip";
         const day = u.slip?.day === "today" ? "t" : "y";
         return resultsFlow(chatId, id, [code, day], { title: `🧠 <i>Understood as:</i> ${SLIP_NAME[code]} results for ${day === "t" ? "today" : "yesterday"}` });
