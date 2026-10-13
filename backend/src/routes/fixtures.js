@@ -2807,8 +2807,22 @@ router.get("/europe-strongest", async (req, res) => {
 // Evaluate one market key against a fixture's model markets. Returns
 // { prob, selection, marketKey, team } or null. marketKey null = no book price
 // available in the feed for that market (over 1.5 / 3.5).
-function evalChatMarket(key, m, home, away) {
+// `side` ("home" | "away" | null) pins the team-side markets — to win, double
+// chance, team to score 1+/2+ — to that side instead of the model's pick. Match
+// totals and BTTS have no side and ignore it.
+export const SIDE_MARKETS = new Set(["win", "dc", "team2plus", "team1plus"]);
+function evalChatMarket(key, m, home, away, side = null) {
   const num = (x) => typeof x === "number";
+  if (side === "home" || side === "away") {
+    const H = side === "home", team = H ? home : away;
+    switch (key) {
+      case "win": { const p = H ? m.homeWin : m.awayWin; return num(p) ? { prob: p, selection: `${team} to win`, marketKey: "winner", winnerSide: side, team } : null; }
+      case "dc": { const p = H ? m.dc1x : m.dcx2; return num(p) ? { prob: p, selection: `${team} or draw`, marketKey: H ? "dc1x" : "dcx2", team } : null; }
+      case "team2plus": { const p = H ? m.home2Plus : m.away2Plus; return num(p) ? { prob: p, selection: goalSel(team, 2), marketKey: H ? "home2Plus" : "away2Plus", team } : null; }
+      case "team1plus": { const p = H ? m.home1Plus : m.away1Plus; return num(p) ? { prob: p, selection: goalSel(team, 1), marketKey: H ? "home1Plus" : "away1Plus", team } : null; }
+      default: break; // totals / BTTS: no side — fall through to the normal evaluation
+    }
+  }
   switch (key) {
     case "over25": return num(m.over25) ? { prob: m.over25, selection: "Over 2.5 goals", marketKey: "over25" } : null;
     case "over15": return num(m.over15) ? { prob: m.over15, selection: "Over 1.5 goals", marketKey: null } : null;
@@ -2933,6 +2947,13 @@ function modelSnapshot(fx) {
   };
 }
 
+// A side filter only shapes team-side markets; say so when the query has none,
+// rather than silently ignoring "home"/"away".
+function sideNotes(params) {
+  if (!params.side || params.markets.some((k) => SIDE_MARKETS.has(k))) return [];
+  return [`Home/away doesn't apply to ${params.markets.length ? "over/under or BTTS (whole-match markets)" : "this"} — showing both sides.`];
+}
+
 // Natural-language query → every fixture where ALL requested markets clear the
 // probability (and optional odds) bar, priced on real bookmaker odds. Public, no
 // external LLM. Shared by GET /ask (the web chatbot) and the Telegram bot, so both
@@ -2949,7 +2970,7 @@ export async function runAsk(rawQ, tz) {
   const { today, targetDates, dateLabel } = resolveAskDays(params, tz);
   const scope = askScope(params, tz);
 
-  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
+  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
   // The count ("5 games") isn't in the key: the full ranked list is cached once and
   // cut to N on the way out, so "5 games" and "10 games" share one scan. The
   // caller's own query/params replace the cached ones (same filters by key).
@@ -2983,7 +3004,7 @@ export async function runAsk(rawQ, tz) {
         const home = fx.homeTeam.name, away = fx.awayTeam.name;
         if (!scope.keepFixture(fx, g)) continue;
 
-        const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away)]);
+        const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away, params.side)]);
         if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;
 
         const odds = await getFixtureOdds(fx.id).catch(() => null);
@@ -2992,7 +3013,7 @@ export async function runAsk(rawQ, tz) {
         for (const [k, e] of evals) {
           let bo = null, bk = null;
           if (e.marketKey && odds?.best) {
-            const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, m.winner);
+            const p = bestBookOddsForLeg(odds.best, { marketKey: e.marketKey, selection: e.selection }, e.winnerSide || m.winner);
             if (p) { bo = p.odds; bk = p.book; }
           }
           if (params.oddsMin != null && (bo == null || bo < params.oddsMin)) { ok = false; break; }
@@ -3012,7 +3033,7 @@ export async function runAsk(rawQ, tz) {
   const matches = scans.flatMap((s) => s.matches).sort((a, b) => b.score - a.score);
   const leaguesScanned = scans.reduce((s, r) => s + r.leaguesScanned, 0);
 
-  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60), filters: scope.filters, filterNotes: scope.filterNotes() };
+  const result = { query: q, params, marketLabels, date: dateLabel, dates: targetDates, leaguesScanned, count: matches.length, matches: matches.slice(0, 60), filters: scope.filters, filterNotes: [...scope.filterNotes(), ...sideNotes(params)] };
   cacheSet(cacheKey, result, TTL.FIXTURES);
   return shape(result, false);
 }
@@ -3102,8 +3123,8 @@ export async function runAcca(rawQ, acca, tz) {
 
   const { targetDates, dateLabel } = resolveAskDays(params, tz);
   const scope = askScope(params, tz, { betSafe: true });
-  const spec = { target: lo, max: hi, legs, maxLegs, minProb: params.minProb, markets: marketLabels };
-  const cacheKey = `acca:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.minProb}:${lo}-${hi || ""}:${legs}:${maxLegs}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
+  const spec = { target: lo, max: hi, legs, maxLegs, minProb: params.minProb, markets: marketLabels, side: params.side || null };
+  const cacheKey = `acca:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${lo}-${hi || ""}:${legs}:${maxLegs}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
   const cached = cacheGet(cacheKey);
   if (cached) return { ...cached, query: q, fromCache: true };
 
@@ -3121,8 +3142,11 @@ export async function runAcca(rawQ, acca, tz) {
         if (fx.status !== "notstarted" || !m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
         if (!scope.keepFixture(fx, g)) continue;
         const home = fx.homeTeam.name, away = fx.awayTeam.name;
-        const cands = params.markets.length
-          ? params.markets.map((k) => evalChatMarket(k, m, home, away)).filter((e) => e?.marketKey).map((e) => ({ marketKey: e.marketKey, selection: e.selection, prob: e.prob, market: e.selection }))
+        // Named markets → those; a side with no market → that side's team markets
+        // (win, double chance, to score 1+/2+); otherwise Blend's full menu.
+        const keys = params.markets.length ? params.markets : params.side ? [...SIDE_MARKETS] : null;
+        const cands = keys
+          ? keys.map((k) => evalChatMarket(k, m, home, away, params.side)).filter((e) => e?.marketKey).map((e) => ({ marketKey: e.marketKey, selection: e.selection, prob: e.prob, market: e.selection, winnerSide: e.winnerSide }))
           : blendCandidates(fx);
         const usable = cands.filter((c) => c.prob >= params.minProb);
         if (usable.length) ranked.push({ g, fx, cands: usable, top: Math.max(...usable.map((c) => c.prob)) });
@@ -3138,7 +3162,7 @@ export async function runAcca(rawQ, acca, tz) {
     if (!odds?.best) continue;
     const model = modelSnapshot(fx);
     for (const c of cands) {
-      const priced = bestBookOddsForLeg(odds.best, { marketKey: c.marketKey, selection: c.selection }, fx.prediction?.markets?.winner);
+      const priced = bestBookOddsForLeg(odds.best, { marketKey: c.marketKey, selection: c.selection }, c.winnerSide || fx.prediction?.markets?.winner);
       if (!priced || priced.odds < ACCA_MIN_LEG) continue;
       pool.push({
         matchId: fx.id, leagueId: g.league?.id, home: fx.homeTeam.name, away: fx.awayTeam.name,

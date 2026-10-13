@@ -15,9 +15,9 @@ export const CHAT_MARKETS = [
   { key: "over25", label: "Over 2.5 Goals", aliases: ["over 2.5", "o2.5", "o25", "2.5+ goals", "3+ goals", "three or more goals"] },
   { key: "over15", label: "Over 1.5 Goals", aliases: ["over 1.5", "o1.5", "1.5+ goals", "two or more goals in the match", "at least 2 goals in the match"] },
   { key: "btts", label: "Both Teams to Score", aliases: ["btts", "both teams to score", "both to score", "gg", "both team to score"] },
-  { key: "dc", label: "Double Chance", aliases: ["double chance", "dc", "or draw", "not to lose", "won't lose", "wont lose"] },
+  { key: "dc", label: "Double Chance", aliases: ["double chance", "dc", "or draw", "draw or away", "draw or home", "1x", "x2", "not to lose", "won't lose", "wont lose"] },
   { key: "team2plus", label: "Team to Score 2+", aliases: ["score 2+", "2+ goals", "to score 2", "two or more goals", "2 plus goals", "brace", "score two"] },
-  { key: "team1plus", label: "Team to Score", aliases: ["team to score", "teams to score", "1+ goals", "score a goal", "anytime scorer", "to score 1"] },
+  { key: "team1plus", label: "Team to Score", aliases: ["team to score", "teams to score", "1+ goals", "score a goal", "anytime scorer", "to score 1", "home to score", "away to score", "hosts to score", "visitors to score", "home side to score", "away side to score"] },
   { key: "win", label: "To Win", aliases: ["to win", "win", "winner", "match winner", "1x2", "outright", "victory"] },
 ];
 
@@ -79,11 +79,11 @@ export const CUP_RX = /\b(cup|copa|pokal|coupe|coppa|beker)\b|taça|taca de/i;
 const EXCL = "exclude|excluding|except|without|skip|ignore|but not|other than|apart from";
 const INCL = "only|include|including|limited to|restricted to";
 // Query grammar that ends a filter clause (a market, day, odds, count, another clause…).
-const STOP = `odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|to win|win|winner|team to|teams to|to score|goals?|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|\\d|${EXCL}|${INCL}`;
+const STOP = `odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|to win|win|winner|team to|teams to|to score|goals?|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|home|away|hosts?|visitors?|visiting|\\d|${EXCL}|${INCL}`;
 const CLAUSE_RX = new RegExp(`\\b(${EXCL}|${INCL})\\s+(?!(?:${STOP})\\b)(.+?)(?=[.;!?]|\\s+(?:${STOP})\\b|\\s*$)`, "g");
 const EXCL_RX = new RegExp(`^(?:${EXCL})$`);
 // Single words that stop the backward walk of a postfix "… only".
-const BACK_STOP_RX = new RegExp(`^(?:odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|win|winner|score|goals?|to|in|from|of|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|${EXCL}|${INCL})$|[\\d%+]`);
+const BACK_STOP_RX = new RegExp(`^(?:odds?|prices?|with|for|at|over|under|above|below|between|tomorrow|today|tonight|this|next|on|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|top|best|btts|gg|both|double|dc|win|winner|score|goals?|to|in|from|of|safe|safest|strong|strongest|likely|likeliest|probable|banker|bankers|very|home|away|hosts?|visitors?|visiting|${EXCL}|${INCL})$|[\\d%+]`);
 
 const cleanTerm = (t) => {
   let x = t.replace(/["“”‘’()]/g, " ").replace(/\s+/g, " ").trim();
@@ -183,10 +183,14 @@ export function parseQuery(raw, leagues = []) {
   const qm = q
     .replace(new RegExp(`\\b(?:odds?|price)\\s*${CMP}\\s*\\d+(?:\\.\\d+)?\\s*\\+?`, "g"), " odds ")
     .replace(/\d+\.\d+\s*\+?\s*(?:odds?|price)\b/g, " odds "); // decimals only: "score 2+ odds…" keeps its 2+
+  // Team-goal markets read the text with "both teams to score" blanked, so a BTTS
+  // question doesn't also trip "teams to score" (team to score 1+).
+  const qmTeam = qm.replace(/\bboth teams? to score\b|\bboth to score\b/g, " ");
   const markets = [];
   for (const m of CHAT_MARKETS) {
     if (markets.includes(m.key)) continue;
-    if (m.aliases.some((a) => hasPhrase(qm, a))) markets.push(m.key);
+    const text = m.key === "team1plus" || m.key === "team2plus" ? qmTeam : qm;
+    if (m.aliases.some((a) => hasPhrase(text, a))) markets.push(m.key);
   }
   // "team to score 2+" trips both team1plus ("team to score") and team2plus
   // ("score 2+"); 2+ implies 1+, so keep only the stronger ask.
@@ -299,5 +303,18 @@ export function parseQuery(raw, leagues = []) {
     if (v >= 1 && v <= 60) limit = v;
   }
 
-  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays, limit, include, exclude };
+  // Home / away side for the team markets: "home teams to score 2+", "away win",
+  // "hosts", "visitors", "on the road". "home or away" / "either side" = no side;
+  // a double chance phrased "home or draw" / "draw or away" picks its side.
+  let side = null;
+  if (!/\b(?:home or away|away or home|either (?:side|team)|both sides)\b/.test(q)) {
+    if (/\bhome or draw\b|\b1x\b/.test(q)) side = "home";
+    else if (/\bdraw or away\b|\bx2\b/.test(q)) side = "away";
+    else {
+      const h = /\b(?:home|hosts?)\b/.test(q), a = /\b(?:away|visitors?|visiting|on the road|road teams?)\b/.test(q);
+      if (h !== a) side = h ? "home" : "away";
+    }
+  }
+
+  return { markets, scope, leagueId, leagueName, minProb, oddsMin, oddsMax, within, date, days: uniqDays, limit, include, exclude, side };
 }

@@ -164,8 +164,9 @@ function formatAskChunks(result, tz, { title, max }) {
   const f = result.filters || {};
   const only = f.include?.length ? `\nOnly: ${esc(f.include.join(", "))}` : "";
   const excl = f.exclude?.length ? `\nExcluding: ${esc(f.exclude.join(", "))}` : "";
+  const side = p.side === "home" ? "\n🏠 Home teams only" : p.side === "away" ? "\n✈️ Away teams only" : "";
   const notes = (result.filterNotes || []).map((n) => `\n⚠️ ${esc(n)}`).join("");
-  const head = `${top}⚽ <b>${esc((result.marketLabels || []).join(" + "))}</b>\n${esc(scope)} · ${esc(result.date)} · ${esc(filters.join(" · "))}${only}${excl}${notes}`;
+  const head = `${top}⚽ <b>${esc((result.marketLabels || []).join(" + "))}</b>\n${esc(scope)} · ${esc(result.date)} · ${esc(filters.join(" · "))}${side}${only}${excl}${notes}`;
 
   if (!result.count) {
     const why = result.leaguesScanned === 0

@@ -78,8 +78,9 @@ const SEARCH_SCHEMA = {
     odds_max: { type: "number" },
     only: { type: "array", items: { type: "string" } },
     exclude: { type: "array", items: { type: "string" } },
+    side: { type: "string", enum: ["either", "home", "away"] },
   },
-  required: ["markets", "region", "days", "count", "min_prob", "odds_min", "odds_max", "only", "exclude"],
+  required: ["markets", "region", "days", "count", "min_prob", "odds_min", "odds_max", "only", "exclude", "side"],
 };
 const UNDERSTAND_SCHEMA = {
   type: "object",
@@ -144,6 +145,7 @@ Choose exactly one intent:
 - min_prob: a minimum model probability in % if they say one ("above 70%"). "safe"/"strong"/"likely" = 65, "very safe"/"banker"/"very likely" = 72. 0 = default.
 - odds_min / odds_max: decimal bookmaker odds bounds ("odds over 1.5" → odds_min 1.5; "under evens" → odds_max 2.0; "between 1.4 and 1.8"). 0 = no bound. Convert fractional odds to decimal (1/2 → 1.5, evens → 2.0).
 - only: things to restrict to — competition names ("Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "Eredivisie", "Major League Soccer", "Championship", "National League"), countries ("Germany", "England"), "friendlies", "cups", or team names. Use the full official team name a data feed would use ("Manchester United" not "Man Utd", "Tottenham" not "Spurs", "Paris Saint Germain" not "PSG", "Barcelona" not "Barca", "Bayern München" not "Bayern"). For a named league, put it here and keep region "all".
+- side: "home" when they want the home team / hosts / home win / "home or draw" / teams playing at home; "away" for the away team / visitors / away win / "draw or away" / teams on the road; otherwise "either". It applies to win, dc, team1plus and team2plus (e.g. "home teams to score 2+" → markets ["team2plus"], side "home"). Totals and BTTS have no side.
 - exclude: same kinds of things to leave out ("no friendlies" → ["friendlies"], "not England" → ["England"]).
 If the user refines the previous search ("same but Sunday", "only Germany", "now for BTTS", "make it 10"), rebuild the WHOLE search from the previous one with the change applied.
 Always fill every field; use null for "search"/"slip"/"acca" when not used, [] for match_refs when not explaining, "" for reply unless intent is chat.`;
@@ -171,8 +173,11 @@ export function composeQuery(s, { allowNoMarket = false } = {}) {
   const oMax = s.odds_max >= 1.01 && s.odds_max <= 1000 ? Number(s.odds_max) : 0;
   const only = (s.only || []).map(cleanTerm).filter(Boolean).slice(0, 6);
   const exclude = (s.exclude || []).map(cleanTerm).filter(Boolean).slice(0, 6);
+  // "home team to score 2+" / "away to win" read naturally; with no market (acca scope) say "home teams".
+  const side = s.side === "home" || s.side === "away" ? (markets.length ? s.side : `${s.side} teams`) : "";
   return [
     count ? `${count} games` : "",
+    side,
     markets.map((k) => PHRASE[k]).join(" and "),
     REGION[s.region] || "",
     (days.length ? days : ["today"]).join(" and "),

@@ -124,10 +124,15 @@ async function fetchCorners(fixtureId, homeId, awayId) {
 // `min` overrides the default keep-threshold where the market's natural range
 // differs: O1.5 is usually high (so only surface strong ones), draws never reach
 // 50% (so a lower bar finds the genuinely draw-leaning matches).
+// `sides` (team-side markets only) lets the Home / Away toggle pin the filter to
+// one team instead of whichever side is stronger.
 const FILTERS = [
-  { key: "win", label: "Win", value: (p) => p.markets.win ?? 0 },
-  { key: "onePlus", label: "1+", value: (p) => Math.max(p.markets.home1Plus ?? 0, p.markets.away1Plus ?? 0) },
-  { key: "twoPlus", label: "2+", value: (p) => Math.max(p.markets.home2Plus ?? 0, p.markets.away2Plus ?? 0) },
+  { key: "win", label: "Win", value: (p) => p.markets.win ?? 0,
+    sides: { home: (p) => p.markets.homeWin ?? 0, away: (p) => p.markets.awayWin ?? 0 } },
+  { key: "onePlus", label: "1+", value: (p) => Math.max(p.markets.home1Plus ?? 0, p.markets.away1Plus ?? 0),
+    sides: { home: (p) => p.markets.home1Plus ?? 0, away: (p) => p.markets.away1Plus ?? 0 } },
+  { key: "twoPlus", label: "2+", value: (p) => Math.max(p.markets.home2Plus ?? 0, p.markets.away2Plus ?? 0),
+    sides: { home: (p) => p.markets.home2Plus ?? 0, away: (p) => p.markets.away2Plus ?? 0 } },
   { key: "over15", label: "O1.5", value: (p) => p.markets.over15 ?? 0, min: 70 },
   { key: "over25", label: "O2.5", value: (p) => p.markets.over25 ?? 0 },
   { key: "btts", label: "BTTS", value: (p) => p.markets.btts ?? 0 },
@@ -136,6 +141,13 @@ const FILTERS = [
 const FILTER_BY_KEY = Object.fromEntries(FILTERS.map((f) => [f.key, f]));
 const FILTER_THRESHOLD = 50; // default keep-threshold for a "prediction type" filter
 const filterMin = (key) => FILTER_BY_KEY[key]?.min ?? FILTER_THRESHOLD;
+// The value a filter ranks/keeps by, honouring the Home / Away toggle where the
+// market has sides (totals / BTTS / draw ignore it).
+const filterValue = (key, side) => {
+  const f = FILTER_BY_KEY[key];
+  return side !== "either" && f?.sides ? f.sides[side] : f.value;
+};
+const SIDE_OPTIONS = [["either", "Either"], ["home", "🏠 Home"], ["away", "✈️ Away"]];
 
 // "Starting within" windows for today's slate (hours; "all" = no time filter).
 const WINDOWS = [
@@ -188,6 +200,9 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   // picking a day in either place keeps the whole app in sync.
   const setDate = onDateChange;
   const [filterMarket, setFilterMarket] = useState("all");
+  const [filterSide, setFilterSide] = useState("either"); // either | home | away (team-side markets)
+  const sideApplies = Boolean(FILTER_BY_KEY[filterMarket]?.sides);
+  const effSide = sideApplies ? filterSide : "either";
   const [statusFilter, setStatusFilter] = useState("all"); // all | live | upcoming | finished
   const [withinFilter, setWithinFilter] = useState("all"); // all | 3 | 6 | 12 (hours, today only)
   const [hourFilter, setHourFilter] = useState("all");     // "all" | 0..23 — kickoff-hour bucket
@@ -253,7 +268,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
     : [];
 
   if (filterMarket !== "all") {
-    const valueOf = FILTER_BY_KEY[filterMarket].value;
+    const valueOf = filterValue(filterMarket, effSide);
     const min = filterMin(filterMarket);
     groups = groups
       .map((g) => ({
@@ -382,7 +397,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
         if (filterMarket === "all") {
           flat.sort((a, b) => (a.fx.startTimestamp ?? Infinity) - (b.fx.startTimestamp ?? Infinity));
         } else {
-          const valueOf = FILTER_BY_KEY[filterMarket].value;
+          const valueOf = filterValue(filterMarket, effSide);
           flat.sort((a, b) => valueOf(b.fx.prediction) - valueOf(a.fx.prediction));
         }
         return flat;
@@ -566,6 +581,26 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
           <span style={styles.filterHint}>≥ {filterMin(filterMarket)}%</span>
         )}
       </div>
+
+      {sideApplies && (
+        <div className="ff-filterbar" style={styles.filterBar} role="radiogroup" aria-label="Home or away team">
+          <span style={styles.filterLabel}>Team</span>
+          {SIDE_OPTIONS.map(([key, label]) => (
+            <button
+              key={key}
+              role="radio"
+              aria-checked={filterSide === key}
+              style={{ ...styles.filterChip, whiteSpace: "nowrap", ...(filterSide === key ? styles.filterChipActive : {}) }}
+              onClick={() => setFilterSide(key)}
+            >
+              {label}
+            </button>
+          ))}
+          <span style={styles.filterHint}>
+            {filterSide === "either" ? "stronger side of each match" : `${filterSide} team only`}
+          </span>
+        </div>
+      )}
 
       {noteOpen && (
         <div className="ff-note" style={styles.note}>
@@ -1243,11 +1278,11 @@ const styles = {
   segDot: { width: 7, height: 7, borderRadius: "50%", background: "var(--loss)", flexShrink: 0 },
   continentBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
   contChip: { fontSize: 13, fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px", cursor: "pointer" },
-  contChipActive: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)" },
+  contChipActive: { background: "var(--accent)", color: "#04121f", border: "1px solid var(--accent)" },
   filterBar: { display: "flex", alignItems: "center", gap: 8, padding: "10px 24px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" },
   filterLabel: { fontSize: 12, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 2 },
   filterChip: { fontSize: 13, color: "var(--text2)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 16, padding: "4px 12px" },
-  filterChipActive: { background: "var(--accent)", color: "#04121f", borderColor: "var(--accent)", fontWeight: 600 },
+  filterChipActive: { background: "var(--accent)", color: "#04121f", border: "1px solid var(--accent)", fontWeight: 600 },
   filterHint: { fontSize: 12, color: "var(--text3)" },
   leagueWrap: { position: "relative" },
   leagueSelect: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)", background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 10px", maxWidth: 220 },
@@ -1345,7 +1380,7 @@ const styles = {
   confidence: { fontSize: 11, textTransform: "capitalize", border: "1px solid", borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" },
   actionRow: { display: "flex", gap: 6, padding: "0 16px 12px" },
   actionBtn: { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 12, color: "var(--text2)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 6px" },
-  actionBtnActive: { color: "var(--accent)", borderColor: "var(--accent)", background: "var(--bg2)" },
+  actionBtnActive: { color: "var(--accent)", border: "1px solid var(--accent)", background: "var(--bg2)" },
   playerWrap: { borderTop: "1px solid var(--border)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 },
   playerNote: { fontSize: 11, color: "var(--text3)", lineHeight: 1.45, margin: 0 },
   playerEmpty: { fontSize: 12, color: "var(--text3)", textAlign: "center", padding: "8px 0", margin: 0 },

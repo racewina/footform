@@ -105,6 +105,7 @@ function Answer({ res }) {
   if (params.minProb) filters.push(`≥ ${params.minProb}%`);
   if (params.oddsMin != null || params.oddsMax != null) filters.push(`odds ${params.oddsMin ?? "–"}–${params.oddsMax ?? "–"}`);
   if (params.within && params.within !== "all") filters.push(`next ${params.within}h`);
+  if (params.side) filters.push(params.side === "home" ? "🏠 home teams" : "✈️ away teams");
   if (picked.include?.length) filters.push(`only ${picked.include.join(", ")}`);
   if (picked.exclude?.length) filters.push(`excl. ${picked.exclude.join(", ")}`);
 

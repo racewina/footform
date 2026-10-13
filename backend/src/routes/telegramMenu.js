@@ -143,34 +143,50 @@ const COUNTS = [["5", "Top 5"], ["10", "Top 10"], ["0", "All"]];
 const find = (list, code) => list.find((x) => x[0] === code);
 const grid = (buttons, per) => buttons.reduce((rows, b, i) => (i % per ? rows[rows.length - 1].push(b) : rows.push([b]), rows), []);
 
-export function builderQuery(mk, sc, dy, n, x) {
+// Home / Away step — only for markets that have a side (to win, double chance,
+// team to score 1+/2+). Totals and BTTS skip it ("e" = either).
+const SIDES = [["h", "🏠 Home", "home"], ["a", "✈️ Away", "away"], ["e", "Either side", ""]];
+const SIDE_MK = new Set(["w", "dc", "t2", "t1"]);
+
+export function builderQuery(mk, sd, sc, dy, n, x) {
   return [
     n && n !== "0" ? `${n} games` : "",
-    find(MARKETS, mk)?.[2], find(SCOPES, sc)?.[2], find(DAYS, dy)?.[2],
+    find(SIDES, sd)?.[2], find(MARKETS, mk)?.[2], find(SCOPES, sc)?.[2], find(DAYS, dy)?.[2],
     x === "1" ? "exclude friendlies" : "",
   ].filter(Boolean).join(" ");
 }
 
 async function builder(chatId, messageId, parts) {
-  const [mk, sc, dy, n, x] = parts;
-  if ((mk && !find(MARKETS, mk)) || (sc && !find(SCOPES, sc)) || (dy && !find(DAYS, dy)) || (n && !find(COUNTS, n))) {
+  const [mk, sd, sc, dy, n, x] = parts;
+  if ((mk && !find(MARKETS, mk)) || (sd && !find(SIDES, sd)) || (sc && !find(SCOPES, sc)) || (dy && !find(DAYS, dy)) || (n && !find(COUNTS, n))) {
     return showMenu(chatId, messageId); // stale/garbled button
   }
-  const crumbs = [find(MARKETS, mk)?.[1], find(SCOPES, sc)?.[1], find(DAYS, dy)?.[1], find(COUNTS, n)?.[1]].filter(Boolean);
+  const sideLabel = sd && sd !== "e" ? find(SIDES, sd)[1] : null;
+  const crumbs = [find(MARKETS, mk)?.[1], sideLabel, find(SCOPES, sc)?.[1], find(DAYS, dy)?.[1], find(COUNTS, n)?.[1]].filter(Boolean);
   const head = `🔎 <b>Find picks</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
   const at = (...p) => ["fp", ...p].join("|");
-  const nav = [["⬅️ Back", parts.length ? at(...parts.slice(0, -1)) : "m"], HOME];
+  // Back skips the side step for markets that never showed it.
+  const prev = parts.slice(0, -1);
+  if (prev.length === 1 && !SIDE_MK.has(prev[0])) prev.length = 0;
+  const nav = [["⬅️ Back", parts.length ? at(...prev) : "m"], HOME];
 
-  if (!mk) return editText(chatId, messageId, `${head}Which market?`, keyboard([...grid(MARKETS.map(([c, l]) => [l, at(c)]), 2), [HOME]]));
-  if (!sc) return editText(chatId, messageId, `${head}Which region?`, keyboard([...grid(SCOPES.map(([c, l]) => [l, at(mk, c)]), 2), nav]));
-  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(mk, sc, c)]), nav]));
-  if (!n) return editText(chatId, messageId, `${head}How many matches?`, keyboard([COUNTS.map(([c, l]) => [l, at(mk, sc, dy, c)]), nav]));
+  if (!mk) {
+    return editText(chatId, messageId, `${head}Which market?`,
+      keyboard([...grid(MARKETS.map(([c, l]) => [l, SIDE_MK.has(c) ? at(c) : at(c, "e")]), 2), [HOME]]));
+  }
+  if (!sd) {
+    return editText(chatId, messageId, `${head}Home or away team?`,
+      keyboard([SIDES.map(([c, l]) => [l, at(mk, c)]), nav]));
+  }
+  if (!sc) return editText(chatId, messageId, `${head}Which region?`, keyboard([...grid(SCOPES.map(([c, l]) => [l, at(mk, sd, c)]), 2), nav]));
+  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(mk, sd, sc, c)]), nav]));
+  if (!n) return editText(chatId, messageId, `${head}How many matches?`, keyboard([COUNTS.map(([c, l]) => [l, at(mk, sd, sc, dy, c)]), nav]));
   if (x == null) {
     return editText(chatId, messageId, `${head}Exclude friendlies?`, keyboard([
-      [["🚫 Exclude friendlies", at(mk, sc, dy, n, "1")], ["Keep them", at(mk, sc, dy, n, "0")]], nav,
+      [["🚫 Exclude friendlies", at(mk, sd, sc, dy, n, "1")], ["Keep them", at(mk, sd, sc, dy, n, "0")]], nav,
     ]));
   }
-  return answerQuery(chatId, builderQuery(mk, sc, dy, n, x), messageId);
+  return answerQuery(chatId, builderQuery(mk, sd, sc, dy, n, x), messageId);
 }
 
 // ---- Slips + results (read from the app's own API, which is edge-cached) ----------
@@ -351,10 +367,11 @@ function formatAcca(r, title = null) {
   const target = `${fmtOdds(spec.target)}${spec.max ? `–${fmtOdds(spec.max)}` : "+"}`;
   const legsTxt = spec.legs ? `${spec.legs} legs` : spec.maxLegs ? `best chance, max ${spec.maxLegs} legs` : "best chance";
   const bar = spec.minProb > 55 ? ` · legs ${spec.minProb}%+` : "";
+  const side = spec.side ? ` · ${spec.side === "home" ? "🏠 home" : "✈️ away"} teams` : "";
   const f = r.filters || {};
   const lines = [
     ...(title ? [title] : []),
-    `🧮 <b>Acca to ${target}</b> · ${esc(r.date)} · ${legsTxt}${bar}`,
+    `🧮 <b>Acca to ${target}</b> · ${esc(r.date)} · ${legsTxt}${bar}${side}`,
     `<i>${esc(spec.markets?.length ? spec.markets.join(" + ") : "any market")} · one leg per match · real bookmaker prices</i>`,
     ...(f.include?.length ? [`Only: ${esc(f.include.join(", "))}`] : []),
     ...(f.exclude?.length ? [`Excluding: ${esc(f.exclude.join(", "))}`] : []),
@@ -401,20 +418,27 @@ export async function answerAcca(chatId, query, acca, messageId = null, { title 
 const ACCA_TARGETS = [["2", "2.0+"], ["3", "3.0+"], ["5", "5.0+"], ["10", "10+"], ["20", "20+"]];
 const ACCA_LEGS = [["0", "🎯 Best chance"], ["2", "2 legs"], ["3", "3 legs"], ["4", "4 legs"], ["5", "5 legs"]];
 
+const ACCA_SIDES = [["h", "🏠 Home teams", "home teams"], ["a", "✈️ Away teams", "away teams"], ["e", "Any", ""]];
+
 async function accaFlow(chatId, messageId, parts) {
-  const [tg_, dy, lg] = parts;
-  if ((tg_ && !find(ACCA_TARGETS, tg_)) || (dy && !find(DAYS, dy)) || (lg && !find(ACCA_LEGS, lg))) return showMenu(chatId, messageId);
-  const crumbs = [tg_ && `target ${find(ACCA_TARGETS, tg_)[1]}`, find(DAYS, dy)?.[1], find(ACCA_LEGS, lg)?.[1]].filter(Boolean);
+  const [tg_, sd, dy, lg] = parts;
+  if ((tg_ && !find(ACCA_TARGETS, tg_)) || (sd && !find(ACCA_SIDES, sd)) || (dy && !find(DAYS, dy)) || (lg && !find(ACCA_LEGS, lg))) return showMenu(chatId, messageId);
+  const crumbs = [tg_ && `target ${find(ACCA_TARGETS, tg_)[1]}`, sd && sd !== "e" ? find(ACCA_SIDES, sd)[1] : null, find(DAYS, dy)?.[1], find(ACCA_LEGS, lg)?.[1]].filter(Boolean);
   const head = `🧮 <b>Build an acca</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
   const at = (...p) => ["ac", ...p].join("|");
   const nav = [["⬅️ Back", parts.length ? at(...parts.slice(0, -1)) : "m"], HOME];
   if (!tg_) return editText(chatId, messageId, `${head}What combined odds are you after?`, keyboard([ACCA_TARGETS.map(([c, l]) => [l, at(c)]), [HOME]]));
-  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(tg_, c)]), nav]));
+  if (!sd) {
+    return editText(chatId, messageId, `${head}Legs on home teams, away teams, or any?\n<i>Home/away picks use to win, double chance and team-to-score legs.</i>`,
+      keyboard([ACCA_SIDES.map(([c, l]) => [l, at(tg_, c)]), nav]));
+  }
+  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(tg_, sd, c)]), nav]));
   if (lg == null) {
     return editText(chatId, messageId, `${head}How many legs? “Best chance” lets me pick the count with the highest chance of landing.`,
-      keyboard([...grid(ACCA_LEGS.map(([c, l]) => [l, at(tg_, dy, c)]), 3), nav]));
+      keyboard([...grid(ACCA_LEGS.map(([c, l]) => [l, at(tg_, sd, dy, c)]), 3), nav]));
   }
-  return answerAcca(chatId, find(DAYS, dy)[2], { target: Number(tg_), max: 0, legs: Number(lg) }, messageId);
+  const scopeQ = [find(ACCA_SIDES, sd)[2], find(DAYS, dy)[2]].filter(Boolean).join(" ");
+  return answerAcca(chatId, scopeQ, { target: Number(tg_), max: 0, legs: Number(lg) }, messageId);
 }
 
 // ---- Daily list -------------------------------------------------------------------
@@ -622,6 +646,7 @@ async function aiReply(chatId, text, msg) {
 const GRAMMAR = new Set([
   ...CHAT_MARKETS.flatMap((m) => m.aliases), ...CHAT_SCOPES.flatMap((x) => x.aliases),
   "today tonight tomorrow weekend monday tuesday wednesday thursday friday saturday sunday this next on",
+  "home away hosts host visitors visitor visiting road either side sides",
   "odds odd price prices over under above below between greater more less than higher lower bigger smaller least most min max minimum maximum of up to from and or",
   "only include including exclude excluding except without skip ignore but not no other apart limited restricted friendlies friendly cups cup club international",
   "safe safest strong strongest likely likeliest probable very banker bankers sure solid percent pct",
