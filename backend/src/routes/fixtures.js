@@ -2825,11 +2825,11 @@ function evalChatMarket(key, m, home, away, side = null) {
   }
   switch (key) {
     case "over25": return num(m.over25) ? { prob: m.over25, selection: "Over 2.5 goals", marketKey: "over25" } : null;
-    case "over15": return num(m.over15) ? { prob: m.over15, selection: "Over 1.5 goals", marketKey: null } : null;
-    case "over35": return num(m.over35) ? { prob: m.over35, selection: "Over 3.5 goals", marketKey: null } : null;
+    case "over15": return num(m.over15) ? { prob: m.over15, selection: "Over 1.5 goals", marketKey: "over15" } : null;
+    case "over35": return num(m.over35) ? { prob: m.over35, selection: "Over 3.5 goals", marketKey: "over35" } : null;
     case "under25": return num(m.over25) ? { prob: 100 - m.over25, selection: "Under 2.5 goals", marketKey: "over25" } : null;
-    case "under15": return num(m.over15) ? { prob: 100 - m.over15, selection: "Under 1.5 goals", marketKey: null } : null;
-    case "under35": return num(m.over35) ? { prob: 100 - m.over35, selection: "Under 3.5 goals", marketKey: null } : null;
+    case "under15": return num(m.over15) ? { prob: 100 - m.over15, selection: "Under 1.5 goals", marketKey: "over15" } : null;
+    case "under35": return num(m.over35) ? { prob: 100 - m.over35, selection: "Under 3.5 goals", marketKey: "over35" } : null;
     case "btts": return num(m.btts) ? { prob: m.btts, selection: "Both teams to score", marketKey: "btts" } : null;
     case "win": { const fav = m.winner === "home" ? home : away; return num(m.win) ? { prob: m.win, selection: `${fav} to win`, marketKey: "winner", team: fav } : null; }
     case "dc": { const k = m.winner === "home" ? "dc1x" : "dcx2"; const p = m.winner === "home" ? m.dc1x : m.dcx2; const fav = m.winner === "home" ? home : away; return num(p) ? { prob: p, selection: `${fav} or draw`, marketKey: k, team: fav } : null; }

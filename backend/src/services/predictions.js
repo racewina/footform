@@ -363,6 +363,15 @@ export function blendPrediction(prediction, odds, marketWeight = 0.4) {
     out.away = Math.round(mw * prediction.away + w * (pa / s) * 100);
     out.markets.win = Math.max(out.home, out.away);
     out.markets.winner = out.home >= out.away ? "home" : "away";
+    // The per-side wins and double chances are read off the same 1X2, so they
+    // must move with it — otherwise they keep the raw model value and drift away
+    // from the blended home/draw/away (e.g. home 39 + draw 25 but "home or
+    // draw" still 73%), inflating every DC leg wherever the model is optimistic.
+    out.markets.homeWin = out.home;
+    out.markets.awayWin = out.away;
+    out.markets.dc1x = out.home + out.draw;
+    out.markets.dc12 = out.home + out.away;
+    out.markets.dcx2 = out.draw + out.away;
   }
 
   // Two-way markets: de-vig (yes vs no) and blend the model's % for that key.

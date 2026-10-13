@@ -107,6 +107,12 @@ export function bestBookOddsForLeg(best, leg, winnerSide) {
     case "over25":
       key = sel.includes("under") ? "under25" : "over25";
       break;
+    case "over15":
+      key = sel.includes("under") ? "under15" : "over15";
+      break;
+    case "over35":
+      key = sel.includes("under") ? "under35" : "over35";
+      break;
     case "btts":
       key = sel.includes("not to score") ? "bttsNo" : "bttsYes";
       break;
