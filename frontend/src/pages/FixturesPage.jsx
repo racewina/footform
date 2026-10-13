@@ -129,6 +129,11 @@ async function fetchCorners(fixtureId, homeId, awayId) {
 const FILTERS = [
   { key: "win", label: "Win", value: (p) => p.markets.win ?? 0,
     sides: { home: (p) => p.markets.homeWin ?? 0, away: (p) => p.markets.awayWin ?? 0 } },
+  // Double chance: Either = the favourite's cover (stronger of 1X / X2); Home = 1X,
+  // Away = X2. DC runs high by nature (home-or-draw averages ~70%), so the bar is
+  // 75%: over 5,908 matches that kept 35% of games, which landed 79.7%.
+  { key: "dc", label: "DC", value: (p) => Math.max(p.markets.dc1x ?? 0, p.markets.dcx2 ?? 0), min: 75,
+    sides: { home: (p) => p.markets.dc1x ?? 0, away: (p) => p.markets.dcx2 ?? 0 } },
   { key: "onePlus", label: "1+", value: (p) => Math.max(p.markets.home1Plus ?? 0, p.markets.away1Plus ?? 0),
     sides: { home: (p) => p.markets.home1Plus ?? 0, away: (p) => p.markets.away1Plus ?? 0 } },
   { key: "twoPlus", label: "2+", value: (p) => Math.max(p.markets.home2Plus ?? 0, p.markets.away2Plus ?? 0),
@@ -786,7 +791,13 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
               </span>
             </div>
             <div className="ff-achips" style={styles.aChips}>
-              {highlight === "onePlus" || highlight === "twoPlus" ? (() => {
+              {highlight === "dc" ? (
+                // DC selected: show both covers on the card (graded ✓/✗ once played).
+                <>
+                  <AChip label={`${teamCode(fixture.homeTeam)} or draw`} val={p.markets.dc1x} hit={fixture.grade?.grades?.dc1x?.hit} active />
+                  <AChip label={`Draw or ${teamCode(fixture.awayTeam)}`} val={p.markets.dcx2} hit={fixture.grade?.grades?.dcx2?.hit} active />
+                </>
+              ) : highlight === "onePlus" || highlight === "twoPlus" ? (() => {
                 // Selecting a team-goals market surfaces each side's scoring
                 // probability right on the card, so the model's strength read is
                 // visible without expanding (a strong scorer reads far higher).
