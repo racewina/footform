@@ -17,7 +17,7 @@ export const CHAT_MARKETS = [
   { key: "btts", label: "Both Teams to Score", aliases: ["btts", "both teams to score", "both to score", "gg", "both team to score"] },
   { key: "dc", label: "Double Chance", aliases: ["double chance", "dc", "or draw", "draw or away", "draw or home", "1x", "x2", "not to lose", "won't lose", "wont lose"] },
   { key: "team2plus", label: "Team to Score 2+", aliases: ["score 2+", "2+ goals", "to score 2", "two or more goals", "2 plus goals", "brace", "score two"] },
-  { key: "team1plus", label: "Team to Score", aliases: ["team to score", "teams to score", "1+ goals", "score a goal", "anytime scorer", "to score 1", "home to score", "away to score", "hosts to score", "visitors to score", "home side to score", "away side to score"] },
+  { key: "team1plus", label: "Team to Score", aliases: ["team to score", "teams to score", "1+ goals", "score a goal", "to score 1", "home to score", "away to score", "hosts to score", "visitors to score", "home side to score", "away side to score"] },
   { key: "win", label: "To Win", aliases: ["to win", "win", "winner", "match winner", "1x2", "outright", "victory"] },
 ];
 

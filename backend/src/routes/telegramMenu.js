@@ -11,7 +11,7 @@
 // the query is shown, which teaches the typed syntax for free.
 
 import { runAsk, runAcca, toolsPass } from "./fixtures.js";
-import { parseQuery, CHAT_MARKETS, CHAT_SCOPES, normText } from "../services/chatbot.js";
+import { parseQuery, CHAT_MARKETS, CHAT_SCOPES, TOP_EUROPE_IDS, normText } from "../services/chatbot.js";
 import { aiEnabled, understand, explain, composeQuery } from "../services/ai.js";
 import { LEAGUES } from "../data/leagues.js";
 import {
@@ -36,6 +36,7 @@ const menuText = () => [
   "",
   "🔎 <b>Find picks</b> — tap through market › region › day › how many",
   "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",
+  "🎯 <b>Player props</b> — goalscorer, shots, cards, fouls, tackles, saves: the top 5 players for any market",
   `🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x)${VALUE_BETS_ENABLED ? ", Value bets" : ""}, Europe Strongest`,
   "📊 <b>Results</b> — how the slips did (✅/❌ per leg)",
   "🗓 <b>My daily list</b> — searches sent to you every morning",
@@ -45,9 +46,9 @@ const menuText = () => [
 ].join("\n");
 const MENU_KB = keyboard([
   [["🔎 Find picks", "fp"], ["🧮 Build an acca", "ac"]],
-  [["🎫 Today's slips", "sl"], ["📊 Results", "rs"]],
-  [["🗓 My daily list", "dl"], ["✍️ Ask in my own words", "aw"]],
-  [["❓ How to ask", "hw"]],
+  [["🎯 Player props", "pp"], ["🎫 Today's slips", "sl"]],
+  [["📊 Results", "rs"], ["🗓 My daily list", "dl"]],
+  [["✍️ Ask in my own words", "aw"], ["❓ How to ask", "hw"]],
 ]);
 
 const MENU_RX = /^(?:\/?(?:start|menu)|hi+|hello|hey|yo|hiya|help me|options|commands|tasks|main menu|show menu|show me the menu)[!.?\s]*$/;
@@ -68,6 +69,7 @@ export function helpText() {
     "• <i>top europe over 2.5 and btts this weekend above 60%</i>",
     "• <i>btts saturday only germany and england</i> · <i>without arsenal</i>",
     "• <i>a few games that come to 3+ odds tomorrow</i> · <i>3-leg acca around 5.0, no friendlies</i> (or tap 🧮 Build an acca)",
+    "• <i>top 5 goalscorers in the Premier League tomorrow</i> · <i>who's most likely to get booked in Arsenal v Chelsea</i> (or tap 🎯 Player props)",
     "",
     "<b>Markets</b>: over/under 1.5·2.5·3.5, BTTS, to win, double chance, team to score / 2+.",
     "<b>Where</b>: top Europe, a continent, a league or country.",
@@ -84,7 +86,7 @@ export function helpText() {
 // ---- Running a query (typed or tapped) --------------------------------------------
 
 const RESULT_KB = keyboard([[["💾 Save as daily", "sv"], ["🔎 New search", "fp"]], [HOME]]);
-const NOTE_KB = keyboard([[["🔎 Find picks", "fp"], ["📋 Menu", "m"]]]);
+const NOTE_KB = keyboard([[["🔎 Find picks", "fp"], ["🎯 Player props", "pp"]], [["📋 Menu", "m"]]]);
 const FOOTER = "🔎 ";
 
 // Show `chunks` starting by editing `messageId` (the "⏳ …" placeholder); the
@@ -449,6 +451,132 @@ async function accaFlow(chatId, messageId, parts) {
   return answerAcca(chatId, scopeQ, { target: Number(tg_), max: 0, legs: Number(lg) }, messageId);
 }
 
+// ---- Player props -----------------------------------------------------------------
+//
+// Market › tier (1+/2+/3+) › day › league (or ⭐ Top Europe) → the TOP 5 players by
+// the model's probability, read from the app's own Props Finder feed (each player's
+// club-season per-90 rates × expected minutes, opponent-aware for shots/fouls/saves).
+// The feed only builds props for a chosen league/match (each match's squad stats are
+// costly), so the flow always narrows to one before ranking.
+
+// [code, button label, tiers key in the feed, tiers offered, short name]
+const PROP_MARKETS = [
+  ["g", "⚽ Goalscorer", "score", [1, 2], "to score"],
+  ["ga", "🅰️ Score or assist", "scoreOrAssist", [1, 2], "goal or assist"],
+  ["st", "🎯 Shots on target", "shotOnTarget", [1, 2, 3], "shots on target"],
+  ["sh", "👟 Shots", "shots", [1, 2, 3], "shots"],
+  ["yc", "🟨 Yellow card", "yellow", [1], "booked"],
+  ["fc", "🦵 Fouls committed", "foul", [1, 2, 3], "fouls committed"],
+  ["fd", "🤕 Fouled", "fouled", [1, 2, 3], "fouls drawn"],
+  ["tk", "🛡 Tackles", "tackle", [1, 2, 3], "tackles"],
+  ["sv", "🧤 GK saves", "saves", [1, 2, 3], "saves"],
+];
+export const PROP_MARKET_KEYS = PROP_MARKETS.map((x) => x[2]);
+const PROP_DAYS = [["td", "Today", 0], ["tm", "Tomorrow", 1]];
+const POS_NAME = { G: "GK", D: "DEF", M: "MID", F: "FWD" };
+const LEAGUES_PER_PAGE = 10;
+
+const propLabel = (pm, tier) => (pm[3].length > 1 ? `${pm[1]} ${tier}+` : pm[1]);
+
+async function propsLeagues(dayCode) {
+  const d = await apiGet(`/props-finder?date=${ymd(find(PROP_DAYS, dayCode)[2])}&tz=${encodeURIComponent(botTz())}`);
+  const count = (id) => (d.matches || []).filter((m) => String(m.leagueId) === String(id)).length;
+  // Top Europe first, then busiest leagues.
+  const rank = (l) => (TOP_EUROPE_IDS.includes(String(l.id)) ? 1000 : 0) + count(l.id);
+  return { leagues: [...(d.leagues || [])].sort((a, b) => rank(b) - rank(a)), matches: d.matches || [], count };
+}
+
+// Rank one league (or several, or one match) and format the top 5.
+export async function answerProps(chatId, messageId, { mk, tier, dayCode, leagueIds = [], matchId = null, title = null }) {
+  const pm = find(PROP_MARKETS, mk);
+  const day = find(PROP_DAYS, dayCode);
+  const dayLabel = day[1].toLowerCase();
+  const label = propLabel(pm, tier);
+  await editText(chatId, messageId, `⏳ Ranking players for ${esc(label)} · ${dayLabel}… (a cold league takes ~10–40s)`);
+  let chunks;
+  try {
+    const date = ymd(day[2]);
+    const qs = (extra) => `/props-finder?date=${date}&tz=${encodeURIComponent(botTz())}&${extra}`;
+    const feeds = matchId ? [await apiGet(qs(`match=${matchId}`))] : [];
+    for (const id of leagueIds) feeds.push(await apiGet(qs(`league=${id}`)));
+    const players = feeds.flatMap((f) => f.players || []);
+    const scope = matchId
+      ? (() => { const m = players[0]; return m ? `${m.home} v ${m.away}` : "that match"; })()
+      : leagueIds.length > 1 ? "⭐ Top Europe" : players[0]?.league || "that league";
+    const ranked = players
+      .map((p) => ({ ...p, prob: p.tiers?.[pm[2]]?.[tier] ?? 0 }))
+      .filter((p) => p.prob > 0)
+      .sort((a, b) => b.prob - a.prob);
+    const top = ranked.slice(0, 5);
+    const head = `${title ? `${title}\n` : ""}<b>${esc(label)}</b> · ${esc(scope)} · ${dayLabel}\n<i>Top ${top.length} of ${ranked.length} players · model chance</i>`;
+    if (!top.length) {
+      chunks = [`${head}\n\nNo player data for that ${matchId ? "match" : "league"} ${dayLabel} — props need upcoming fixtures with squad stats.`];
+    } else {
+      // Player's team first, then the real fixture (home v away) — never reversed.
+      const lines = top.map((p, i) =>
+        `${i + 1}. <b>${esc(p.name)}</b>${p.pos ? ` (${POS_NAME[p.pos] || esc(p.pos)})` : ""} — <b>${p.prob}%</b>\n   ${esc(p.team)} · ${esc(p.home)} v ${esc(p.away)} · ${p.leagueFlag || ""} ${esc(p.league)} · ${ko(p.kickoff)}`);
+      chunks = chunkLines(head, lines, "\n\n<i>From club-season rates × expected minutes — lineups aren't confirmed, so check they start.</i>");
+    }
+  } catch (e) {
+    chunks = [`⚠️ Couldn't load player props: ${esc(e.message)}`];
+  }
+  const back = `pp|${mk}|${tier}|${dayCode}`;
+  return deliver(chatId, messageId, chunks, keyboard([[["🏟 Another league", back], ["🎯 Another market", "pp"]], [HOME]]));
+}
+
+async function propsFlow(chatId, messageId, parts) {
+  const [mk, tierRaw, dayCode, target] = parts;
+  const pm = mk && find(PROP_MARKETS, mk);
+  if (mk && !pm) return showMenu(chatId, messageId);
+  const at = (...p) => ["pp", ...p].join("|");
+  // Single-tier markets skip the tier step.
+  const tier = tierRaw ? Number(tierRaw) : pm && pm[3].length === 1 ? pm[3][0] : null;
+  if (tier && pm && !pm[3].includes(tier)) return showMenu(chatId, messageId);
+  if (dayCode && !find(PROP_DAYS, dayCode)) return showMenu(chatId, messageId);
+  const crumbs = [pm?.[1], tier && pm?.[3].length > 1 ? `${tier}+` : null, find(PROP_DAYS, dayCode)?.[1]].filter(Boolean);
+  const head = `🎯 <b>Player props</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
+  const backOf = (...p) => (p.length ? at(...p) : "m");
+
+  if (!pm) return editText(chatId, messageId, `${head}Which market?`, keyboard([...grid(PROP_MARKETS.map(([c, l]) => [l, at(c)]), 2), [HOME]]));
+  if (!tier) {
+    return editText(chatId, messageId, `${head}How many?`,
+      keyboard([pm[3].map((t) => [`${t}+`, at(mk, t)]), [["⬅️ Back", "pp"], HOME]]));
+  }
+  const tierBack = pm[3].length > 1 ? at(mk) : "pp";
+  if (!dayCode) return editText(chatId, messageId, `${head}Which day?`, keyboard([PROP_DAYS.map(([c, l]) => [l, at(mk, tier, c)]), [["⬅️ Back", tierBack], HOME]]));
+
+  if (!target || /^p\d+$/.test(target)) {
+    await editText(chatId, messageId, `${head}⏳ Finding leagues with player data…`);
+    let info;
+    try { info = await propsLeagues(dayCode); } catch (e) { return editText(chatId, messageId, `⚠️ Couldn't load leagues: ${esc(e.message)}`, keyboard([[HOME]])); }
+    if (!info.leagues.length) {
+      return editText(chatId, messageId, `${head}No upcoming fixtures with player data ${find(PROP_DAYS, dayCode)[1].toLowerCase()}.`,
+        keyboard([[["⬅️ Back", at(mk, tier)], HOME]]));
+    }
+    const page = target ? Number(target.slice(1)) : 0;
+    const slice = info.leagues.slice(page * LEAGUES_PER_PAGE, (page + 1) * LEAGUES_PER_PAGE);
+    const hasTop = info.leagues.some((l) => TOP_EUROPE_IDS.includes(String(l.id)));
+    const rows = [
+      ...(hasTop && page === 0 ? [[["⭐ Top Europe (all)", at(mk, tier, dayCode, "te")]]] : []),
+      ...grid(slice.map((l) => [`${l.flag || ""} ${l.name} (${info.count(l.id)})`.trim(), at(mk, tier, dayCode, String(l.id))]), 2),
+      [
+        ...(page > 0 ? [["‹ Prev", at(mk, tier, dayCode, `p${page - 1}`)]] : []),
+        ...((page + 1) * LEAGUES_PER_PAGE < info.leagues.length ? [["More ›", at(mk, tier, dayCode, `p${page + 1}`)]] : []),
+      ],
+      [["⬅️ Back", at(mk, tier)], HOME],
+    ];
+    return editText(chatId, messageId, `${head}Which league? <i>(matches in brackets)</i>`, keyboard(rows));
+  }
+
+  let leagueIds = [];
+  if (target === "te") {
+    const info = await propsLeagues(dayCode).catch(() => ({ leagues: [] }));
+    leagueIds = info.leagues.map((l) => String(l.id)).filter((id) => TOP_EUROPE_IDS.includes(id));
+  } else if (/^\d+$/.test(target)) leagueIds = [target];
+  else return showMenu(chatId, messageId);
+  return answerProps(chatId, messageId, { mk, tier, dayCode, leagueIds });
+}
+
 // ---- Daily list -------------------------------------------------------------------
 
 // Save a query to the pinned daily list. Returns the reply text.
@@ -531,6 +659,7 @@ export async function handleCallback(cq, { deadline }) {
     case "m": return showMenu(chatId, messageId);
     case "fp": return builder(chatId, messageId, parts);
     case "ac": return accaFlow(chatId, messageId, parts);
+    case "pp": return propsFlow(chatId, messageId, parts);
     case "sl": return slipsFlow(chatId, messageId, parts);
     case "rs": return resultsFlow(chatId, messageId, parts);
     case "dl": return dailyFlow(chatId, messageId, parts, deadline);
@@ -597,6 +726,32 @@ async function aiReply(chatId, text, msg) {
         const q = composeQuery(u.search);
         if (!q || !parseQuery(q, LEAGUES).markets.length) return say(`${esc(u.reply || "I couldn't turn that into a search.")}\n\nOr tap your way there:`);
         return answerQuery(chatId, q, id, { title: `🧠 <i>Understood as:</i> ${esc(q)}` });
+      }
+      case "props": {
+        const pr = u.props || {};
+        const pm = PROP_MARKETS.find((x) => x[2] === pr.market) || PROP_MARKETS[0];
+        const tier = pm[3].includes(Number(pr.tier)) ? Number(pr.tier) : pm[3][0];
+        const dayCode = pr.day === "tomorrow" ? "tm" : "td";
+        const desc = `${propLabel(pm, tier)} · ${pr.team || pr.league || "pick a league"} · ${dayCode === "tm" ? "tomorrow" : "today"}`;
+        const title = `🧠 <i>Understood as:</i> ${esc(desc)}`;
+        const info = await propsLeagues(dayCode).catch(() => ({ leagues: [], matches: [] }));
+        if (pr.team) {
+          const t = normText(pr.team);
+          const m = info.matches.find((x) => normText(x.home).includes(t) || normText(x.away).includes(t) || t.includes(normText(x.home)) || t.includes(normText(x.away)));
+          if (m) return answerProps(chatId, id, { mk: pm[0], tier, dayCode, matchId: String(m.id), title });
+          await sendText(chatId, `I couldn't find a ${dayCode === "tm" ? "tomorrow" : "today"} match with player data for “${esc(pr.team)}” — pick a league instead:`);
+        } else if (pr.league) {
+          const l = normText(pr.league);
+          if (/top europe|top 5 leagues|big leagues/.test(l)) {
+            const ids = info.leagues.map((x) => String(x.id)).filter((x) => TOP_EUROPE_IDS.includes(x));
+            if (ids.length) return answerProps(chatId, id, { mk: pm[0], tier, dayCode, leagueIds: ids, title });
+          }
+          const hits = info.leagues.filter((x) => normText(x.name) === l || normText(x.name).includes(l) || l.includes(normText(x.name)));
+          const pick = hits.find((x) => TOP_EUROPE_IDS.includes(String(x.id))) || hits[0];
+          if (pick) return answerProps(chatId, id, { mk: pm[0], tier, dayCode, leagueIds: [String(pick.id)], title });
+          await sendText(chatId, `No ${dayCode === "tm" ? "tomorrow" : "today"} fixtures with player data in “${esc(pr.league)}” — pick a league:`);
+        }
+        return propsFlow(chatId, id, [pm[0], String(tier), dayCode]);
       }
       case "acca": {
         if (!u.acca) return say(`${esc(u.reply || "What combined odds are you after?")}\n\nOr tap your way there:`, keyboard([[["🧮 Build an acca", "ac"], HOME]]));

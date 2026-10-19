@@ -63,7 +63,7 @@ async function call({ system, user, effort, schema = null }) {
 export const MARKET_KEYS = ["over15", "over25", "over35", "under15", "under25", "under35", "btts", "win", "dc", "team2plus", "team1plus"];
 export const REGIONS = ["all", "top-europe", "europe", "south-america", "north-america", "asia", "africa"];
 export const DAY_KEYS = ["today", "tomorrow", "weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-const INTENTS = ["search", "acca", "save_daily", "explain", "slips", "results", "menu", "chat"];
+const INTENTS = ["search", "acca", "props", "save_daily", "explain", "slips", "results", "menu", "chat"];
 
 const SEARCH_SCHEMA = {
   type: "object",
@@ -99,6 +99,20 @@ const UNDERSTAND_SCHEMA = {
         required: ["kind", "day"],
       }],
     },
+    props: {
+      anyOf: [{ type: "null" }, {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          market: { type: "string", enum: ["score", "scoreOrAssist", "shotOnTarget", "shots", "yellow", "foul", "fouled", "tackle", "saves"] },
+          tier: { type: "integer" },
+          league: { type: "string" },
+          team: { type: "string" },
+          day: { type: "string", enum: ["today", "tomorrow"] },
+        },
+        required: ["market", "tier", "league", "team", "day"],
+      }],
+    },
     acca: {
       anyOf: [{ type: "null" }, {
         type: "object",
@@ -115,7 +129,7 @@ const UNDERSTAND_SCHEMA = {
     match_refs: { type: "array", items: { type: "integer" } },
     reply: { type: "string" },
   },
-  required: ["intent", "search", "slip", "acca", "match_refs", "reply"],
+  required: ["intent", "search", "slip", "acca", "props", "match_refs", "reply"],
 };
 
 const UNDERSTAND_SYSTEM = `You are the language layer of FootForm, a private Telegram bot for one football bettor. FootForm has its own prediction model (Dixon–Coles + Elo) and live bookmaker odds from API-Football. You never pick matches, quote probabilities or odds, or give tips yourself — you only work out what the user wants, as JSON, and the bot runs it on its own engine.
@@ -125,6 +139,7 @@ Do EXACTLY what the user asked — never substitute a different product because 
 Choose exactly one intent:
 - "search": list matches for one or more betting markets ("over 2.5 games tomorrow", "5 btts picks"). Fill "search".
 - "acca": BUILD an accumulator / slip / multiple / parlay / combo to a target COMBINED price — any request about games whose odds add up / multiply / "amount to" / "come to" a total ("a few games that make 3+ odds", "a 5 odds acca", "4-fold around 10/1", "safe double at evens or better", "slip of 3 games paying 3.0"). Fill "acca" with target_odds (decimal combined odds wanted; fractional 10/1 = 11.0, evens = 2.0; "3+ odds" = 3.0), max_odds (upper bound if they give a range like "3 to 5 odds" → 5.0, else 0) and legs (number of games: "a few" = 3, "a couple"/"double" = 2, "treble" = 3, "4-fold" = 4, not stated = 0 = let the bot pick the count with the best chance) and max_legs (an upper limit: "not more than 4 games", "max 4", "up to 4", "4 games or fewer" → legs 0, max_legs 4; otherwise 0). "Banker(s)"/"very safe"/"sure" legs → search.min_prob 72; "safe" → 65. ALSO fill "search" with the scope: days, region, only/exclude, min_prob, and markets ONLY if they named markets for the legs ("over 2.5 acca" → ["over25"]; otherwise []). Leave count 0 and odds_min/odds_max 0 in "search" — the combined target lives in "acca".
+- "props": PLAYER props — questions about individual players: goalscorers / anytime scorer / "who will score" (score), goal or assist (scoreOrAssist), shots on target (shotOnTarget), shots (shots), booked / yellow card / cards (yellow), fouls committed (foul), fouled / fouls won / fouls drawn (fouled), tackles (tackle), goalkeeper saves (saves). Fill "props": market; tier = how many (1 for "to score", "2+ shots on target" → 2, "a brace" → 2; default 1); league = the competition if named ("Premier League", "La Liga", "Champions League"; "top Europe" for the big leagues), else ""; team = a team if they name a team or a match ("Arsenal v Chelsea" → "Arsenal"), else ""; day = "tomorrow" if they say tomorrow, else "today". The bot always lists the top 5 players.
 - "save_daily": the user wants a search saved to their daily morning list ("send me this every day", "save that"). Fill "search" with the search to save (if they mean the previous search, rebuild it from the context).
 - "explain": a question about matches already shown ("why is #2 in there?", "tell me more about the Tamworth game", "is the first one safe?", "compare 1 and 3"). Put the 1-based numbers of the matches they mean, from the LAST RESULTS list, in "match_refs" (by number, team name or position). If no results are in context, or you can't tell which match, use "chat" and ask them to reply to the results message.
 - "slips": ONLY when they name one of the bot's ready-made products — VIP, safe bets/safe accumulators, Blend, value bets, Europe Strongest. A request to build games up to an odds target is "acca", NEVER "slips". Fill "slip": kind vip (VIP slips), safe (safe accumulators), blend (Blend bets: accumulators on real bookmaker prices, 3–10x), blend_high (Blend bets at bigger odds, 10–50x — "big blend", "long shot acca"), value (value bets — currently switched off; still classify the request as value so the bot can say so), europe (Europe Strongest); day today or tomorrow.
@@ -148,7 +163,7 @@ Choose exactly one intent:
 - side: "home" when they want the home team / hosts / home win / "home or draw" / teams playing at home; "away" for the away team / visitors / away win / "draw or away" / teams on the road; otherwise "either". It applies to win, dc, team1plus and team2plus (e.g. "home teams to score 2+" → markets ["team2plus"], side "home"). Totals and BTTS have no side.
 - exclude: same kinds of things to leave out ("no friendlies" → ["friendlies"], "not England" → ["England"]).
 If the user refines the previous search ("same but Sunday", "only Germany", "now for BTTS", "make it 10"), rebuild the WHOLE search from the previous one with the change applied.
-Always fill every field; use null for "search"/"slip"/"acca" when not used, [] for match_refs when not explaining, "" for reply unless intent is chat.`;
+Always fill every field; use null for "search"/"slip"/"acca"/"props" when not used, [] for match_refs when not explaining, "" for reply unless intent is chat.`;
 
 const clampInt = (v, lo, hi) => (Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : 0);
 const cleanTerm = (s) => String(s || "").replace(/[^\p{L}\p{N} .'&-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 40);
@@ -205,6 +220,7 @@ export async function understand(text, ctx = {}) {
     search: out.search && typeof out.search === "object" ? out.search : null,
     slip: out.slip && typeof out.slip === "object" ? out.slip : null,
     acca: out.acca && typeof out.acca === "object" && Number(out.acca.target_odds) > 1 ? out.acca : null,
+    props: out.props && typeof out.props === "object" ? out.props : null,
     matchRefs: Array.isArray(out.match_refs) ? out.match_refs.filter(Number.isInteger) : [],
     reply: typeof out.reply === "string" ? out.reply.slice(0, 600) : "",
   };
