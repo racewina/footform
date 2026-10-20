@@ -136,6 +136,7 @@ export async function writeDaily(chatId, queries, prevMessageId) {
 // ---- Formatting an /ask result ----------------------------------------------
 
 const SCOPE_LABEL = {
+  "europe-top5": "⭐ Europe top 5", "europe-other": "🇪🇺 Europe (rest)",
   "top-europe": "Top Europe", europe: "Europe", "south-america": "South America",
   "north-america": "North America", asia: "Asia", africa: "Africa", all: "All leagues",
 };

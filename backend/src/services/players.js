@@ -67,23 +67,33 @@ const pct = (x) => Math.round(clamp(x, 0, 1) * 100);
 //   • opts.savesMultiplier — the OPPONENT's attack level. Scales GK saves: a
 //     keeper facing a shot-heavy side makes more saves, one on a dominant team
 //     fewer. This corrects saves' biggest blind spot (it's opponent-driven).
+//   • opts.strengthMultiplier / opts.oppStrengthMultiplier — the cross-league
+//     league-strength edge (UEFA / CONMEBOL ties, services/crossLeague.js) for the
+//     player's side / the opponent. Club per-90s were earned against domestic
+//     opposition, so a weak-league striker facing a top-5 side scales down (and
+//     vice-versa). Scales goals, goal involvement and — when no attackMultiplier is
+//     given — shots; the opponent's edge scales GK saves when no savesMultiplier is.
 export function playerProps(stat, opts = {}) {
   if (!stat || !stat.minutes) return null;
   const per90 = (n) => n / (stat.minutes / 90);
   const expMin = expectedMinutes(stat);
   const foulMult = opts.foulMultiplier > 0 ? opts.foulMultiplier : 1;
-  const attackMult = opts.attackMultiplier > 0 ? opts.attackMultiplier : 1;
-  const savesMult = opts.savesMultiplier > 0 ? opts.savesMultiplier : 1;
+  const strengthMult = opts.strengthMultiplier > 0 ? opts.strengthMultiplier : 1;
+  const oppStrengthMult = opts.oppStrengthMultiplier > 0 ? opts.oppStrengthMultiplier : 1;
+  // attackMultiplier/savesMultiplier come from the model's xG, which already carries
+  // the cross-league edge — so the strength multiplier only fills in when they're absent.
+  const attackMult = opts.attackMultiplier > 0 ? opts.attackMultiplier : strengthMult;
+  const savesMult = opts.savesMultiplier > 0 ? opts.savesMultiplier : oppStrengthMult;
 
   const mk = (rate90) => {
     const t = tierProbs(rate90, expMin);
     return { 1: pct(t.p1), 2: pct(t.p2), 3: pct(t.p3) };
   };
   const tiers = {
-    score: mk(per90(stat.goals)),
+    score: mk(per90(stat.goals) * strengthMult),
     // Goal involvement — a goal OR an assist. Rates add under the Poisson sum, so
     // one combined rate prices the "to score or assist" market directly.
-    scoreOrAssist: mk(per90((stat.goals || 0) + (stat.assists || 0))),
+    scoreOrAssist: mk(per90((stat.goals || 0) + (stat.assists || 0)) * strengthMult),
     shots: mk(per90(stat.shots) * attackMult),
     shotOnTarget: mk(per90(stat.shotsOnTarget) * attackMult),
     foul: mk(per90(stat.foulsCommitted) * foulMult),

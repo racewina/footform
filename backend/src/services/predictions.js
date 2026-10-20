@@ -345,6 +345,13 @@ export function computePrediction(homeTeamForm, awayTeamForm, elo = null, baseli
     lambdaAway = w * lambdaAway + (1 - w) * eloLambdas.lambdaAway;
   }
 
+  // Cross-league competitions: a league-strength goal edge (log multiplier for the
+  // home side, the negative for the away side) — see services/crossLeague.js.
+  if (opts.goalTilt) {
+    lambdaHome *= Math.exp(opts.goalTilt);
+    lambdaAway *= Math.exp(-opts.goalTilt);
+  }
+
   lambdaHome = clamp(lambdaHome, 0.2, 4);
   lambdaAway = clamp(lambdaAway, 0.2, 4);
 

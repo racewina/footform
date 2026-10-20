@@ -40,6 +40,8 @@ import { buildEloModel } from "../services/elo.js";
 import { loadSnapshot, saveSnapshot } from "../services/snapshot.js";
 import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, NO_BET_LEAGUES, continentFor } from "../data/leagues.js";
 import { parseQuery, CHAT_MARKETS, TOP_EUROPE_IDS, CONTINENT_OF_SCOPE, CUP_RX, normText } from "../services/chatbot.js";
+import { EUROPE_TOP5_IDS, EUROPE_OTHER_IDS } from "../data/botLeagues.js";
+import { crossLeagueTilt, isCrossLeague, CROSS_MARKET_WEIGHT } from "../services/crossLeague.js";
 import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
 const router = express.Router();
@@ -436,6 +438,9 @@ function rowsFromStarters(starters, matchups = {}, sideOpt = null) {
         // attack level scales shots; the opponent's attack scales GK saves.
         attackMultiplier: sideOpt?.attackMultiplier,
         savesMultiplier: sideOpt?.savesMultiplier,
+        // Cross-league (UEFA/CONMEBOL) league-strength edge — goals, G+A, shots.
+        strengthMultiplier: sideOpt?.strengthMultiplier,
+        oppStrengthMultiplier: sideOpt?.oppStrengthMultiplier,
       }),
       // Only the opponent name ships — the multiplier/dribbles metrics that
       // reveal the model stay server-side.
@@ -589,8 +594,10 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
-    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(fx.startTimestamp), formWeight: sampleAwareFormWeight(elo, fx.homeTeam.id, fx.awayTeam.id, fx.startTimestamp) });
-    if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id]);
+    fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(fx.startTimestamp), formWeight: sampleAwareFormWeight(elo, fx.homeTeam.id, fx.awayTeam.id, fx.startTimestamp), goalTilt: crossLeagueTilt(leagueId, eventsMap[fx.homeTeam.id], eventsMap[fx.awayTeam.id]) });
+    // Cross-league cups: the bookmaker prices league strength far better than our
+    // domestic-form model, so lean 90% on it there (see services/crossLeague.js).
+    if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id], isCrossLeague(leagueId) ? CROSS_MARKET_WEIGHT : undefined);
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };
@@ -659,7 +666,7 @@ async function buildLeagueResults(leagueId, targetDate, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp), goalTilt: crossLeagueTilt(leagueId, eventsMap[homeId], eventsMap[awayId]) });
     const grade = prediction.markets
       ? gradeMatch(prediction.markets, homeScore, awayScore)
       : null;
@@ -743,7 +750,7 @@ export async function predictLeagueWindow(leagueId, dateSet, tz, { calibrate = t
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp), calibrate });
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp), calibrate, goalTilt: crossLeagueTilt(leagueId, eventsMap[homeId], eventsMap[awayId]) });
     if (!prediction.markets) continue;
     rows.push({
       event: e, prediction,
@@ -802,7 +809,7 @@ async function buildLeagueResultsWindow(leagueId, dateSet, tz) {
     const eloRatings = elo
       ? { home: elo.ratingBefore(homeId, e.startTimestamp), away: elo.ratingBefore(awayId, e.startTimestamp) }
       : null;
-    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp) });
+    const prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(e.startTimestamp), formWeight: sampleAwareFormWeight(elo, homeId, awayId, e.startTimestamp), goalTilt: crossLeagueTilt(leagueId, eventsMap[homeId], eventsMap[awayId]) });
     if (!prediction.markets) continue;
     const grade = gradeMatch(prediction.markets, e.homeScore.current, e.awayScore.current);
 
@@ -1436,14 +1443,27 @@ router.get("/match/:matchId/prediction", async (req, res) => {
 // when available, else a projected XI; the positional foul model runs across
 // both sides in three phases — gather stats, compute matchups, price props.
 // Shared by the /players route and the Props Finder.
+// Player-props context for a UEFA/CONMEBOL tie: each side's league-strength goal
+// multiplier (and the opponent's, for saves). null for any other competition or
+// when both teams come from the same strength group.
+async function crossLeaguePropsContext(leagueId, homeId, awayId) {
+  if (!isCrossLeague(leagueId) || !homeId || !awayId) return null;
+  const ev = await getEventsForTeams([homeId, awayId]).catch(() => ({}));
+  const t = crossLeagueTilt(leagueId, ev[homeId], ev[awayId]);
+  if (!t) return null;
+  const h = Math.exp(t), a = Math.exp(-t);
+  return {
+    home: { strengthMultiplier: h, oppStrengthMultiplier: a },
+    away: { strengthMultiplier: a, oppStrengthMultiplier: h },
+  };
+}
+
 async function getFixturePlayerProps(fixtureId, season, context = null) {
   // Opponent-aware context (Event Generator) shifts shot/saves volumes, so it must
   // be part of the key — otherwise the Event Generator's adjusted props would leak
   // into the (opponent-agnostic) Props Finder and vice-versa.
-  const ctxSig = context
-    ? `h${context.home?.attackMultiplier?.toFixed(2)}/${context.home?.savesMultiplier?.toFixed(2)}` +
-      `:a${context.away?.attackMultiplier?.toFixed(2)}/${context.away?.savesMultiplier?.toFixed(2)}`
-    : "base";
+  const sideSig = (c) => [c?.attackMultiplier, c?.savesMultiplier, c?.strengthMultiplier].map((x) => x?.toFixed(2)).join("/");
+  const ctxSig = context ? `h${sideSig(context.home)}:a${sideSig(context.away)}` : "base";
   const cacheKey = `player-props:${fixtureId}:${season}:${ctxSig}`;
   const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached;
@@ -1645,7 +1665,7 @@ router.get("/props-finder", async (req, res) => {
       const year = seasonYearOf[lid];
       if (!Number.isFinite(year)) continue;
       const propsSeason = lid === "1" ? year - 1 : year; // WC props use the club season
-      const pp = await getFixturePlayerProps(fx.id, propsSeason).catch(() => null);
+      const pp = await getFixturePlayerProps(fx.id, propsSeason, await crossLeaguePropsContext(lid, fx.homeId, fx.awayId)).catch(() => null);
       if (!pp || !pp.available) continue;
       for (const side of [pp.home, pp.away]) {
         if (!side) continue;
@@ -1752,9 +1772,12 @@ async function buildEventBoard(fixtureId, leagueId, targetDate, tz) {
   const clampMult = (x) => Math.max(0.7, Math.min(1.6, x));
   const homeAtt = m.xgHome != null ? clampMult(m.xgHome / REF_XG) : 1;
   const awayAtt = m.xgAway != null ? clampMult(m.xgAway / REF_XG) : 1;
+  // Cross-league ties also shift goals/G+A by the league-strength edge (the xG
+  // multipliers above already carry it for shots/saves).
+  const xl = await crossLeaguePropsContext(leagueId, homeTeamId, awayTeamId);
   const context = {
-    home: { attackMultiplier: homeAtt, savesMultiplier: awayAtt },
-    away: { attackMultiplier: awayAtt, savesMultiplier: homeAtt },
+    home: { attackMultiplier: homeAtt, savesMultiplier: awayAtt, strengthMultiplier: xl?.home.strengthMultiplier },
+    away: { attackMultiplier: awayAtt, savesMultiplier: homeAtt, strengthMultiplier: xl?.away.strengthMultiplier },
   };
 
   const season = await getCurrentSeason(leagueId).catch(() => null);
@@ -2893,7 +2916,9 @@ function resolveAskDays(params, tz) {
 // matches; exclude = drop if ANY exclude term matches.
 // betSafe (accumulators): also bar NO_BET leagues/countries and friendlies, like
 // every other bet engine — unless the user explicitly asked for friendlies.
-function askScope(params, tz, { betSafe = false } = {}) {
+// allow (Set of league ids, optional): the Telegram bot's featured leagues — every
+// league outside it is dropped from the scan.
+function askScope(params, tz, { betSafe = false, allow = null } = {}) {
   const inc = params.include || [], exc = params.exclude || [];
   const filterSig = [...inc.map((t) => `+${t.kind}:${t.ids?.join(".") || t.value || ""}`), ...exc.map((t) => `-${t.kind}:${t.ids?.join(".") || t.value || ""}`)].join(",");
   const leagueHit = (t, lg) => {
@@ -2917,12 +2942,17 @@ function askScope(params, tz, { betSafe = false } = {}) {
     let leagueIds;
     if (params.scope === "league" && params.leagueId) leagueIds = [params.leagueId];
     else if (params.scope === "top-europe") leagueIds = TOP_EUROPE_IDS.filter((id) => LEAGUES_BY_ID[id]);
-    else {
+    else if (params.scope === "europe-top5") leagueIds = EUROPE_TOP5_IDS.filter((id) => LEAGUES_BY_ID[id]);
+    else if (params.scope === "europe-other") {
+      const other = new Set(EUROPE_OTHER_IDS);
+      leagueIds = (await leaguesPlayedOn(targetDate, tz, "notstarted")).filter((id) => other.has(String(id)));
+    } else {
       const all = await leaguesPlayedOn(targetDate, tz, "notstarted");
       if (params.scope === "all") leagueIds = all;
       else { const cont = CONTINENT_OF_SCOPE[params.scope]; leagueIds = all.filter((id) => LEAGUES_BY_ID[id] && continentFor(LEAGUES_BY_ID[id].country) === cont); }
     }
     return leagueIds.filter((id) => {
+      if (allow && !allow.has(String(id))) return false;
       const lg = LEAGUES_BY_ID[id];
       if (betSafe && lg && (NO_BET_COUNTRIES.has(lg.country) || NO_BET_LEAGUES.has(String(id)) || (!wantsFriendlies && (lg.friendly || /friendl/i.test(lg.name))))) return false;
       if (exc.some((t) => leagueHit(t, lg))) return false;
@@ -2945,7 +2975,18 @@ function askScope(params, tz, { betSafe = false } = {}) {
     .filter((t) => t.kind === "team" && !matchedTeamTerms.has(t.value))
     .map((t) => `${t.label} didn't match any team, league or country in the fixtures scanned.`);
 
-  return { filterSig, leagueIdsFor, keepFixture, filterNotes, filters: { include: inc.map((t) => t.label), exclude: exc.map((t) => t.label) } };
+  // With an allowlist, say when the user named something the bot doesn't feature
+  // instead of silently returning nothing.
+  const allowNotes = () => {
+    if (!allow) return [];
+    const out = [];
+    if (params.scope === "league" && params.leagueId && !allow.has(String(params.leagueId))) out.push(`${params.leagueName || "That league"} isn't featured in the bot.`);
+    for (const t of inc) if (t.kind === "league" && !t.ids.some((id) => allow.has(String(id)))) out.push(`${t.label} isn't featured in the bot.`);
+    if (out.length) out.push("The bot covers Europe top 5 (UEFA comps + top 5 leagues and their second tiers), the rest of Europe, and South America's top flights.");
+    return out;
+  };
+
+  return { filterSig: `${filterSig}${allow ? "|bot" : ""}`, leagueIdsFor, keepFixture, filterNotes: () => [...filterNotes(), ...allowNotes()], filters: { include: inc.map((t) => t.label), exclude: exc.map((t) => t.label) } };
 }
 
 // Compact model snapshot so a follow-up ("why this one?") can be explained from the
@@ -2972,7 +3013,7 @@ function sideNotes(params) {
 // probability (and optional odds) bar, priced on real bookmaker odds. Public, no
 // external LLM. Shared by GET /ask (the web chatbot) and the Telegram bot, so both
 // answer identically.
-export async function runAsk(rawQ, tz) {
+export async function runAsk(rawQ, tz, { allow = null } = {}) {
   const q = String(rawQ || "").trim().slice(0, 300);
 
   const params = parseQuery(q, LEAGUES);
@@ -2982,7 +3023,7 @@ export async function runAsk(rawQ, tz) {
   }
 
   const { today, targetDates, dateLabel } = resolveAskDays(params, tz);
-  const scope = askScope(params, tz);
+  const scope = askScope(params, tz, { allow });
 
   const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
   // The count ("5 games") isn't in the key: the full ranked list is cached once and
@@ -3125,7 +3166,7 @@ const accaSlip = (legs) => {
 };
 
 // q = plain-English scope (days/region/filters/markets/bar); acca = { target, max, legs }.
-export async function runAcca(rawQ, acca, tz) {
+export async function runAcca(rawQ, acca, tz, { allow = null } = {}) {
   const q = String(rawQ || "").trim().slice(0, 300);
   const params = parseQuery(q, LEAGUES);
   const lo = Math.max(1.1, Math.min(1000, Number(acca?.target) || 3));
@@ -3136,7 +3177,7 @@ export async function runAcca(rawQ, acca, tz) {
   const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
 
   const { targetDates, dateLabel } = resolveAskDays(params, tz);
-  const scope = askScope(params, tz, { betSafe: true });
+  const scope = askScope(params, tz, { betSafe: true, allow });
   const spec = { target: lo, max: hi, legs, maxLegs, minProb: params.minProb, markets: marketLabels, side: params.side || null };
   const cacheKey = `acca:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${lo}-${hi || ""}:${legs}:${maxLegs}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
   const cached = cacheGet(cacheKey);

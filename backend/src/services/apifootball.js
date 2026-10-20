@@ -588,6 +588,8 @@ export async function fetchFixturesByDate(date) {
       leagueId: fx.league?.id,
       startTimestamp: fx.fixture?.timestamp ?? null,
       status: mapStatus(fx.fixture?.status?.short),
+      homeId: fx.teams?.home?.id ?? null,
+      awayId: fx.teams?.away?.id ?? null,
       home: fx.teams?.home?.name ?? null,
       away: fx.teams?.away?.name ?? null,
     }))

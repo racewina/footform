@@ -1,3 +1,5 @@
+import { UEFA_IDS, CONMEBOL_IDS, EUROPE_TOP5_IDS } from "../data/botLeagues.js";
+
 // Rule-based natural-language parser for the prediction chatbot. Turns a free-
 // text query ("list teams in the europe top to score O2.5 and BTTS above 60%")
 // into structured filters the /ask route runs through the SAME prediction engine
@@ -23,6 +25,9 @@ export const CHAT_MARKETS = [
 
 // Continent / grouping scopes. TOP_EUROPE = the marquee European competitions.
 export const CHAT_SCOPES = [
+  // Bot categories first — longer phrases must win over "europe top" / "europe".
+  { key: "europe-top5", label: "Europe top 5", aliases: ["europe top 5", "europe top five", "top 5 europe", "top five europe", "european top 5"] },
+  { key: "europe-other", label: "Rest of Europe", aliases: ["rest of europe", "other europe", "other european", "europe others", "europe other", "other leagues in europe"] },
   { key: "top-europe", label: "Top Europe", aliases: ["top europe", "europe top", "top european", "big leagues", "top leagues", "top 5 leagues", "top five leagues", "big 5 leagues", "big five leagues", "elite leagues", "major leagues", "top flight"] },
   { key: "europe", label: "Europe", aliases: ["europe", "european"] },
   { key: "south-america", label: "South America", aliases: ["south america", "conmebol", "latin america"] },
@@ -103,7 +108,10 @@ function resolveFilterTerm(term, leagues) {
   if (/^(?:club |international )?friendl(?:y|ies)$/.test(n)) return { kind: "friendlies", label: "friendlies" };
   if (/^cups?$|^cup (?:games|matches|competitions)$|^domestic cups?$/.test(n)) return { kind: "cups", label: "cups" };
   if (CONTINENT_WORDS[n]) return { kind: "continent", value: CONTINENT_WORDS[n], label: CONTINENT_WORDS[n] };
-  if (CHAT_SCOPES[0].aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...TOP_EUROPE_IDS], label: "Top Europe" };
+  if (/^(?:uefa|uefa (?:competitions|cups)|european (?:cups|competitions))$/.test(n)) return { kind: "league", ids: [...UEFA_IDS], label: "UEFA competitions" };
+  if (/^(?:conmebol (?:cups|competitions)|south american cups|libertadores and sudamericana)$/.test(n)) return { kind: "league", ids: [...CONMEBOL_IDS], label: "CONMEBOL cups" };
+  if (CHAT_SCOPES.find((x) => x.key === "europe-top5").aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...EUROPE_TOP5_IDS], label: "Europe top 5" };
+  if (CHAT_SCOPES.find((x) => x.key === "top-europe").aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...TOP_EUROPE_IDS], label: "Top Europe" };
 
   const countries = [...new Set(leagues.map((l) => l.country))];
   const countryOf = (w) => countries.find((c) => normText(c) === w) || (DEMONYMS[w] && countries.includes(DEMONYMS[w]) ? DEMONYMS[w] : null);

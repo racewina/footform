@@ -16,6 +16,7 @@ import rateLimit from "express-rate-limit";
 import { fetchTeamByName, fetchTeamLastMatches, fetchTeamLeagues, fetchLeagueSeason, fetchPastEvents } from "../services/apifootball.js";
 import { computePrediction, parseFormFromEvents, leagueBaselines, topScorelines, FORM_HALF_LIFE_DAYS } from "../services/predictions.js";
 import { buildEloModel } from "../services/elo.js";
+import { matchupTilt } from "../services/crossLeague.js";
 import { cacheGet, cacheSet, TTL } from "../services/cache.js";
 
 const router = express.Router();
@@ -158,7 +159,9 @@ export async function analyzeMatchup(home, away) {
     homeForm, awayForm,
     ctx?.eloRatings || null,
     ctx?.baselines || null,
-    decayFor(Math.floor(Date.now() / 1000)),
+    // Teams from different countries' leagues (e.g. a UEFA tie): add the
+    // league-strength edge (0 for same-country pairs) — see services/crossLeague.js.
+    { ...decayFor(Math.floor(Date.now() / 1000)), goalTilt: matchupTilt(homeData.events, awayData.events) },
   );
   const m = p.markets || {};
 

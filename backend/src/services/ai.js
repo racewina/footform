@@ -61,7 +61,7 @@ async function call({ system, user, effort, schema = null }) {
 // ---- understand() -------------------------------------------------------------
 
 export const MARKET_KEYS = ["over15", "over25", "over35", "under15", "under25", "under35", "btts", "win", "dc", "team2plus", "team1plus"];
-export const REGIONS = ["all", "top-europe", "europe", "south-america", "north-america", "asia", "africa"];
+export const REGIONS = ["all", "europe-top5", "europe-other", "europe", "south-america"];
 export const DAY_KEYS = ["today", "tomorrow", "weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const INTENTS = ["search", "acca", "props", "save_daily", "explain", "slips", "results", "menu", "chat"];
 
@@ -154,7 +154,13 @@ Choose exactly one intent:
   btts = both teams to score (GG); win = the favourite to win (1X2, "home win", "away win", "banker win");
   dc = double chance / favourite not to lose; team2plus = a team to score 2+ goals ("brace for a team", "team over 1.5"); team1plus = a team to score.
   Unsupported markets (corners, cards, correct score, handicap, draw no bet, player props): use "chat" and say which markets are supported.
-- region: all (default), top-europe (the big five leagues + Champions/Europa/Conference League), europe, south-america, north-america, asia, africa.
+- region: this bot ONLY covers three categories —
+    europe-top5 = UEFA Champions/Europa/Conference League + the top 5 leagues and their second tiers (Premier League & Championship, La Liga & La Liga 2, Serie A & Serie B, Bundesliga & 2. Bundesliga, Ligue 1 & Ligue 2) — "top Europe", "Europe top 5", "big 5 leagues";
+    europe-other = every other European country (Netherlands, Portugal, Scotland, Turkey, Belgium, Norway…) — "rest of Europe", "other European leagues";
+    south-america = South American top flights + Copa Libertadores/Sudamericana;
+    europe = all of Europe (top 5 + the rest); all = everything the bot covers (default).
+  A single country goes in "only" (e.g. region europe-top5, only ["England"]; region south-america, only ["Brazil"]); UEFA competitions → only ["uefa"]; Libertadores/Sudamericana → only ["conmebol cups"].
+  If they ask for anything outside these (MLS, Saudi Pro League, Asia, Africa, Mexico, the FA Cup, League One, Série B…), use "chat" and say the bot covers Europe top 5, the rest of Europe and South America's top flights.
 - days: any of today, tomorrow, weekend, or weekday names (= the next such day). [] if the user didn't name a day (the bot uses today, rolling on to tomorrow if today has nothing left). "tonight" = today. "this weekend" = weekend.
 - count: how many matches they want (e.g. "5 games", "a few" = 5, "a couple" = 2); 0 = all that qualify.
 - min_prob: a minimum model probability in % if they say one ("above 70%"). "safe"/"strong"/"likely" = 65, "very safe"/"banker"/"very likely" = 72. 0 = default.
@@ -178,7 +184,7 @@ export function composeQuery(s, { allowNoMarket = false } = {}) {
     over15: "over 1.5", over25: "over 2.5", over35: "over 3.5", under15: "under 1.5", under25: "under 2.5",
     under35: "under 3.5", btts: "btts", win: "to win", dc: "double chance", team2plus: "team to score 2+", team1plus: "team to score",
   };
-  const REGION = { all: "", "top-europe": "top europe", europe: "europe", "south-america": "south america", "north-america": "north america", asia: "asia", africa: "africa" };
+  const REGION = { all: "", "europe-top5": "europe top 5", "europe-other": "rest of europe", europe: "europe", "south-america": "south america" };
   const markets = [...new Set((s.markets || []).filter((k) => PHRASE[k]))];
   if (!markets.length && !allowNoMarket) return "";
   const days = [...new Set((s.days || []).filter((d) => DAY_KEYS.includes(d)))].map((d) => (d === "weekend" ? "this weekend" : d));
