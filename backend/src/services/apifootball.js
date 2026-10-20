@@ -345,6 +345,7 @@ export async function fetchFixtureTeams(fixtureId) {
     home: { id: fx.teams?.home?.id ?? null, name: fx.teams?.home?.name ?? null },
     away: { id: fx.teams?.away?.id ?? null, name: fx.teams?.away?.name ?? null },
     season: fx.league?.season ?? null,
+    leagueId: fx.league?.id ?? null,
   };
 }
 

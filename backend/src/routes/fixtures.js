@@ -1546,6 +1546,20 @@ async function getFixturePlayerProps(fixtureId, season, context = null) {
 // Player prop markets for one fixture (anytime scorer / shots on target / fouls
 // / tackles), each carrying its 1+/2+/3+ probabilities. LAZY — the UI only calls
 // it when the player-props section is expanded.
+// The match card only knows the fixture id, so look up its competition + teams to
+// apply the cross-league strength context (UEFA/CONMEBOL ties; null otherwise).
+// Cached per fixture; a failed lookup isn't cached and falls back to plain club form.
+async function fixtureCrossContext(fixtureId) {
+  const key = `xl-ctx:${fixtureId}`;
+  const cached = cacheGet(key);
+  if (cached !== undefined) return cached;
+  const t = await fetchFixtureTeams(fixtureId).catch(() => null);
+  if (!t) return null;
+  const ctx = await crossLeaguePropsContext(t.leagueId, t.home.id, t.away.id);
+  cacheSet(key, ctx, TTL.FIXTURES);
+  return ctx;
+}
+
 router.get("/match/:fixtureId/players", async (req, res) => {
   const { fixtureId } = req.params;
   const season = parseInt(req.query.season, 10);
@@ -1553,7 +1567,7 @@ router.get("/match/:fixtureId/players", async (req, res) => {
     return res.status(400).json({ error: "season (club season year) required" });
   }
   try {
-    const out = await getFixturePlayerProps(fixtureId, season);
+    const out = await getFixturePlayerProps(fixtureId, season, await fixtureCrossContext(fixtureId));
     res.json({ ...out, fromCache: false });
   } catch (err) {
     console.error(`[player-props] ${err.message}`);
