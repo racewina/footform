@@ -3027,10 +3027,40 @@ function sideNotes(params) {
 // probability (and optional odds) bar, priced on real bookmaker odds. Public, no
 // external LLM. Shared by GET /ask (the web chatbot) and the Telegram bot, so both
 // answer identically.
-export async function runAsk(rawQ, tz, { allow = null } = {}) {
+// The Telegram bot's match list: every not-yet-started fixture in the given leagues on
+// a day token ("today" | "tomorrow" | "weekend"), soonest first. One fixtures-by-date
+// call per UTC date (same cheap source as leaguesPlayedOn), cached briefly.
+export async function upcomingMatchesFor(dayTok, tz, allow) {
+  const { targetDates } = resolveAskDays({ days: [dayTok] }, tz);
+  const cacheKey = `bot-matches:${targetDates.join("_")}:${tz || "server"}:${allow ? allow.size : "all"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+  const shift = (ymd, n) => { const [y, m, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
+  const utc = [...new Set(targetDates.flatMap((d) => [shift(d, -1), d, shift(d, 1)]))];
+  const lists = await Promise.all(utc.map((d) => fetchFixturesByDate(d).catch(() => [])));
+  const seen = new Set(), out = [];
+  for (const fx of lists.flat()) {
+    const lid = String(fx.leagueId);
+    if (seen.has(fx.id) || !LEAGUES_BY_ID[lid] || (allow && !allow.has(lid))) continue;
+    if (fx.status !== "notstarted" || !fx.startTimestamp) continue;
+    const date = formatDate(new Date(fx.startTimestamp * 1000), tz);
+    if (!targetDates.includes(date)) continue;
+    seen.add(fx.id);
+    out.push({ id: String(fx.id), leagueId: lid, home: fx.home, away: fx.away, kickoff: fx.startTimestamp, date });
+  }
+  out.sort((a, b) => a.kickoff - b.kickoff || a.home.localeCompare(b.home));
+  cacheSet(cacheKey, out, 5 * 60);
+  return out;
+}
+
+// `only` ({ fixtureIds, leagueIds }) narrows the scan to picked matches (the bot's
+// match list). A single picked match is always shown with its numbers — the % bar is
+// dropped — since the user asked about that game, not for whatever clears the bar.
+export async function runAsk(rawQ, tz, { allow = null, only = null } = {}) {
   const q = String(rawQ || "").trim().slice(0, 300);
 
   const params = parseQuery(q, LEAGUES);
+  if (only?.fixtureIds?.length) params.minProb = 0;
   const marketLabels = params.markets.map((k) => CHAT_MARKETS.find((x) => x.key === k)?.label || k);
   if (!params.markets.length) {
     return { query: q, params, count: 0, matches: [], note: "I couldn't spot a market in that. Try one of: over 2.5, over 1.5, BTTS, to win, double chance, team to score 2+, team to score." };
@@ -3039,7 +3069,7 @@ export async function runAsk(rawQ, tz, { allow = null } = {}) {
   const { today, targetDates, dateLabel } = resolveAskDays(params, tz);
   const scope = askScope(params, tz, { allow });
 
-  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}`;
+  const cacheKey = `ask:${params.scope}:${params.leagueId || ""}:${params.markets.join(",")}:${params.side || ""}:${params.minProb}:${params.oddsMin}-${params.oddsMax}:${params.within}:${targetDates.join("_")}:${tz || "server"}:${scope.filterSig}${only ? `:only=${(only.fixtureIds || []).join(".")}/${(only.leagueIds || []).join(".")}` : ""}`;
   // The count ("5 games") isn't in the key: the full ranked list is cached once and
   // cut to N on the way out, so "5 games" and "10 games" share one scan. The
   // caller's own query/params replace the cached ones (same filters by key).
@@ -3056,7 +3086,8 @@ export async function runAsk(rawQ, tz, { allow = null } = {}) {
   // Scan a single date: resolve its leagues, build each league-day, collect the
   // fixtures that clear every requested market's probability + odds bar.
   const scanDate = async (targetDate) => {
-    const leagueIds = await scope.leagueIdsFor(targetDate);
+    let leagueIds = await scope.leagueIdsFor(targetDate);
+    if (only?.leagueIds) leagueIds = leagueIds.filter((id) => only.leagueIds.includes(String(id)));
     const isToday = targetDate === today;
     const windowed = params.within !== "all" && isToday;
     const cutoff = windowed ? nowSec + Number(params.within) * 3600 : Infinity;
@@ -3072,6 +3103,7 @@ export async function runAsk(rawQ, tz, { allow = null } = {}) {
         if (!m || !fx.homeTeam?.id || !fx.awayTeam?.id) continue;
         const home = fx.homeTeam.name, away = fx.awayTeam.name;
         if (!scope.keepFixture(fx, g)) continue;
+        if (only?.fixtureIds && !only.fixtureIds.includes(String(fx.id))) continue;
 
         const evals = params.markets.map((k) => [k, evalChatMarket(k, m, home, away, params.side)]);
         if (evals.some(([, e]) => !e || e.prob < params.minProb)) continue;

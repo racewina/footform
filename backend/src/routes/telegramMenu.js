@@ -10,10 +10,10 @@
 // tapped search and a typed one are answered by exactly the same engine — and
 // the query is shown, which teaches the typed syntax for free.
 
-import { runAsk, runAcca, toolsPass } from "./fixtures.js";
+import { runAsk, runAcca, toolsPass, upcomingMatchesFor } from "./fixtures.js";
 import { parseQuery, CHAT_MARKETS, CHAT_SCOPES, TOP_EUROPE_IDS, normText } from "../services/chatbot.js";
 import { aiEnabled, understand, explain, composeQuery } from "../services/ai.js";
-import { LEAGUES } from "../data/leagues.js";
+import { LEAGUES, LEAGUES_BY_ID } from "../data/leagues.js";
 import { BOT_FEATURED, BOT_REGIONS, regionCountries } from "../data/botLeagues.js";
 import {
   tg, esc, sendText, sendChunks, editText, keyboard, botTz, pushHours,
@@ -36,7 +36,7 @@ const menuText = () => [
   "⚽ <b>FootForm</b> — here's what I can do:",
   "<i>Covers ⭐ Europe top 5 (UEFA + top 5 leagues & their 2nd tiers), 🇪🇺 the rest of Europe and 🌎 South America's top flights.</i>",
   "",
-  "🔎 <b>Find picks</b> — tap through market › region › day › how many",
+  "🔎 <b>Find picks</b> — market › day › region › pick a match or all of them",
   "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",
   "🎯 <b>Player props</b> — goalscorer, shots, cards, fouls, tackles, saves: the top 5 players for any market",
   `🎫 <b>Today's slips</b> — VIP, Safe, Blend (3–10x / 10–50x)${VALUE_BETS_ENABLED ? ", Value bets" : ""}, Europe Strongest`,
@@ -143,75 +143,178 @@ const MARKETS = [
   ["w", "To win", "to win"], ["dc", "Double chance", "double chance"],
   ["t2", "Team 2+ goals", "team to score 2+"], ["t1", "Team to score", "team to score"],
 ];
-// ---- Featured leagues: region › country (see data/botLeagues.js) --------------------
+// ---- Featured leagues: day › region › match list ------------------------------------
 // The bot only covers ⭐ Europe top 5, 🇪🇺 Europe (other countries) and 🌎 South
-// America's top flights. A region pick turns into a parser scope phrase, a country
-// pick into an "only <country>" clause — so taps, typed queries and saved dailies all
-// run the same text, and BOT_SCOPE keeps every scan inside the featured leagues.
+// America's top flights. Every flow picks the DAY first, then a region (with the day's
+// match counts), then lists that day's matches: ✅ All of them, one match, or 🏳️ narrow
+// by country first. A region turns into a parser scope phrase and a country into an
+// "only <country>" clause, so taps, typed queries and saved dailies run the same text;
+// BOT_SCOPE keeps every scan inside the featured leagues.
 const BOT_SCOPE = { allow: BOT_FEATURED };
 const regionOf = (code) => BOT_REGIONS.find((r) => r.code === code);
-function regionParts(rg, ct) { // → { scope, only, label } or null if stale
-  if (rg === "all") return { scope: "", only: "", label: "🌍 All featured" };
+
+// rg ("all" | region code) + ct ("*" whole region | "?" country picker | country index)
+// → { ids: Set of league ids, label, scope phrase, only phrase } or null if stale.
+function scopeOf(rg, ct) {
+  if (rg === "all") return { ids: BOT_FEATURED, label: "🌍 All featured", scope: "", only: "" };
   const r = regionOf(rg);
   if (!r) return null;
-  if (ct === "*") return { scope: r.phrase, only: "", label: r.label };
+  if (!ct || ct === "*" || ct === "?") return { ids: new Set(r.ids), label: r.label, scope: r.phrase, only: "" };
   const c = regionCountries(rg)[Number(ct)];
-  return c ? { scope: r.phrase, only: c.phrase, label: `${r.label} › ${c.flag} ${c.name}` } : null;
+  return c ? { ids: new Set(c.ids), label: `${r.label} › ${c.flag} ${c.name}`, scope: r.phrase, only: c.phrase } : null;
 }
-const validRegion = (rg, ct) => !rg || rg === "all" || (regionOf(rg) && (!ct || regionParts(rg, ct)));
-const regionRows = (to) => [[["🌍 All featured", to("all", "-")]], ...grid(BOT_REGIONS.map((r) => [r.label, to(r.code)]), 3)];
-const countryRows = (rg, to) => [[[`All of ${regionOf(rg).label}`, to("*")]], ...grid(regionCountries(rg).map((c, i) => [`${c.flag} ${c.name}`, to(String(i))]), 2)];
+const validScope = (rg, ct) => !rg || Boolean(scopeOf(rg, ct)) && (rg !== "all" || !ct || ct === "*");
 
 const DAYS = [["td", "Today", "today"], ["tm", "Tomorrow", "tomorrow"], ["we", "This weekend", "this weekend"]];
+const DAY_TOK = { td: "today", tm: "tomorrow", we: "weekend" };
 const COUNTS = [["5", "Top 5"], ["10", "Top 10"], ["0", "All"]];
 const find = (list, code) => list.find((x) => x[0] === code);
 const grid = (buttons, per) => buttons.reduce((rows, b, i) => (i % per ? rows[rows.length - 1].push(b) : rows.push([b]), rows), []);
+const PER_PAGE = 8;
 
-// Home / Away step — only for markets that have a side (to win, double chance,
-// team to score 1+/2+). Totals and BTTS skip it ("e" = either).
+// The day's not-yet-started featured matches: [{ id, leagueId, home, away, kickoff }].
+const dayMatches = (dy) => upcomingMatchesFor(DAY_TOK[dy], botTz(), BOT_FEATURED);
+const inScope = (matches, sc) => matches.filter((m) => sc.ids.has(String(m.leagueId)));
+
+const kShort = (ts, withDay) => new Intl.DateTimeFormat("en-GB", { timeZone: botTz(), ...(withDay ? { weekday: "short" } : {}), hour: "2-digit", minute: "2-digit" }).format(new Date(ts * 1000));
+const clip = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+// Region step: every region that has matches that day, with its count.
+function regionKb(matches, to) {
+  const n = (ids) => matches.filter((m) => ids.includes(String(m.leagueId))).length;
+  const regions = BOT_REGIONS.map((r) => ({ r, n: n(r.ids) })).filter((x) => x.n);
+  return [
+    [[`🌍 All featured (${matches.length})`, to("all")]],
+    ...grid(regions.map(({ r, n: c }) => [`${r.label} (${c})`, to(r.code)]), 1),
+  ];
+}
+
+// Country picker: the region's countries (and UEFA / CONMEBOL group) with matches that day.
+function countryKb(rg, matches, to) {
+  const list = regionCountries(rg).map((c, i) => ({ c, i, n: matches.filter((m) => c.ids.includes(String(m.leagueId))).length })).filter((x) => x.n);
+  const total = list.reduce((s, x) => s + x.n, 0);
+  return [
+    [[`✅ All of ${regionOf(rg).label} (${total})`, to("*")]],
+    ...grid(list.map(({ c, i, n }) => [`${c.flag} ${c.name} (${n})`, to(String(i))]), 2),
+  ];
+}
+
+// The match list: the page's matches written out (kickoff · league · teams), then the
+// buttons — ✅ All, 🏳️ By country, one button per match when `pickable`, and paging.
+function matchListView({ matches, page, weekend, allBtn, countryBtn, pick, pageTo, note = "" }) {
+  const pages = Math.max(1, Math.ceil(matches.length / PER_PAGE));
+  const pg = Math.min(Math.max(0, page), pages - 1);
+  const slice = matches.slice(pg * PER_PAGE, pg * PER_PAGE + PER_PAGE);
+  const lines = slice.map((m, i) => {
+    const lg = LEAGUES_BY_ID[String(m.leagueId)];
+    return `${pg * PER_PAGE + i + 1}. ${esc(kShort(m.kickoff, weekend))} · ${esc(m.home)} v ${esc(m.away)}\n     ${lg?.flag || ""} ${esc(lg?.name || "")}`;
+  });
+  if (countryBtn && matches.length > 3 * PER_PAGE) note = `${note ? `${note} ` : ""}Long list — 🏳️ By country narrows it.`;
+  const text = `<b>${matches.length} match${matches.length === 1 ? "" : "es"}</b>${pages > 1 ? ` · page ${pg + 1}/${pages}` : ""}\n${lines.join("\n")}${note ? `\n\n<i>${note}</i>` : ""}`;
+  const rows = [];
+  const top = [allBtn, countryBtn].filter(Boolean);
+  if (top.length) rows.push(top);
+  if (pick) rows.push(...slice.map((m, i) => [[clip(`${pg * PER_PAGE + i + 1}. ${m.home} v ${m.away}`, 40), pick(m)]]));
+  if (pages > 1) rows.push([...(pg > 0 ? [["◀️ Prev", pageTo(pg - 1)]] : []), ...(pg < pages - 1 ? [["Next ▶️", pageTo(pg + 1)]] : [])]);
+  return { text, rows };
+}
+const pageOf = (mt) => (mt && /^p\d+$/.test(mt) ? Number(mt.slice(1)) : 0);
+
+// Two-way markets that have a side: to win, double chance, team to score 1+/2+.
 const SIDES = [["h", "🏠 Home", "home"], ["a", "✈️ Away", "away"], ["e", "Either side", ""]];
 const SIDE_MK = new Set(["w", "dc", "t2", "t1"]);
 
-export function builderQuery(mk, sd, rg, ct, dy, n, x) {
-  const r = regionParts(rg, ct) || { scope: "", only: "" };
+export function builderQuery(mk, sd, dy, rg, ct, n) {
+  const r = (rg && scopeOf(rg, ct)) || { scope: "", only: "" };
   return [
     n && n !== "0" ? `${n} games` : "",
     find(SIDES, sd)?.[2], find(MARKETS, mk)?.[2], r.scope, find(DAYS, dy)?.[2], r.only,
-    x === "1" ? "exclude friendlies" : "",
   ].filter(Boolean).join(" ");
 }
 
+// Find picks: market › (home/away) › day › region › match list → ✅ All (› how many)
+// or one match. callback: fp|mk|sd|dy|rg|ct|mt|n — mt = "p<page>" | "a" (all) | fixture id.
 async function builder(chatId, messageId, parts) {
-  const [mk, sd, rg, ct, dy, n, x] = parts;
-  if ((mk && !find(MARKETS, mk)) || (sd && !find(SIDES, sd)) || !validRegion(rg, ct) || (dy && !find(DAYS, dy)) || (n && !find(COUNTS, n))) {
+  const [mk, sd, dy, rg, ct, mt, n] = parts;
+  if ((mk && !find(MARKETS, mk)) || (sd && !find(SIDES, sd)) || (dy && !find(DAYS, dy)) || !validScope(rg, ct) || (n && !find(COUNTS, n))) {
     return showMenu(chatId, messageId); // stale/garbled button
   }
+  const sc = rg ? scopeOf(rg, ct) : null;
   const sideLabel = sd && sd !== "e" ? find(SIDES, sd)[1] : null;
-  const crumbs = [find(MARKETS, mk)?.[1], sideLabel, ct ? regionParts(rg, ct)?.label : regionOf(rg)?.label, find(DAYS, dy)?.[1], find(COUNTS, n)?.[1]].filter(Boolean);
+  const crumbs = [find(MARKETS, mk)?.[1], sideLabel, find(DAYS, dy)?.[1], sc?.label, mt === "a" ? "All matches" : null, find(COUNTS, n)?.[1]].filter(Boolean);
   const head = `🔎 <b>Find picks</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
   const at = (...p) => ["fp", ...p].join("|");
-  // Back skips steps that were never shown: the side step for totals/BTTS, and the
-  // country step after "All featured".
-  const prev = parts.slice(0, -1);
-  if (prev.length === 1 && !SIDE_MK.has(prev[0])) prev.length = 0;
-  if (prev.length === 3 && prev[2] === "all") prev.length = 2;
-  const nav = [["⬅️ Back", parts.length ? at(...prev) : "m"], HOME];
+  const marketBack = SIDE_MK.has(mk) ? at(mk) : "fp";
 
   if (!mk) {
     return editText(chatId, messageId, `${head}Which market?`,
       keyboard([...grid(MARKETS.map(([c, l]) => [l, SIDE_MK.has(c) ? at(c) : at(c, "e")]), 2), [HOME]]));
   }
-  if (!sd) return editText(chatId, messageId, `${head}Home or away team?`, keyboard([SIDES.map(([c, l]) => [l, at(mk, c)]), nav]));
-  if (!rg) return editText(chatId, messageId, `${head}Which region?`, keyboard([...regionRows((...p) => at(mk, sd, ...p)), nav]));
-  if (!ct) return editText(chatId, messageId, `${head}Which country?`, keyboard([...countryRows(rg, (c) => at(mk, sd, rg, c)), nav]));
-  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(mk, sd, rg, ct, c)]), nav]));
-  if (!n) return editText(chatId, messageId, `${head}How many matches?`, keyboard([COUNTS.map(([c, l]) => [l, at(mk, sd, rg, ct, dy, c)]), nav]));
-  if (x == null) {
-    return editText(chatId, messageId, `${head}Exclude friendlies?`, keyboard([
-      [["🚫 Exclude friendlies", at(mk, sd, rg, ct, dy, n, "1")], ["Keep them", at(mk, sd, rg, ct, dy, n, "0")]], nav,
-    ]));
+  if (!sd) return editText(chatId, messageId, `${head}Home or away team?`, keyboard([SIDES.map(([c, l]) => [l, at(mk, c)]), [["⬅️ Back", "fp"], HOME]]));
+  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(mk, sd, c)]), [["⬅️ Back", marketBack], HOME]]));
+
+  let matches;
+  try { matches = await dayMatches(dy); } catch (e) { return editText(chatId, messageId, `⚠️ Couldn't load fixtures: ${esc(e.message)}`, keyboard([[HOME]])); }
+  const dayWord = find(DAYS, dy)[1].toLowerCase();
+  if (!rg) {
+    if (!matches.length) return editText(chatId, messageId, `${head}No featured matches left ${dayWord}.`, keyboard([[["⬅️ Back", at(mk, sd)], HOME]]));
+    return editText(chatId, messageId, `${head}Which region? <i>(matches in brackets)</i>`, keyboard([...regionKb(matches, (r) => at(mk, sd, dy, r, "*")), [["⬅️ Back", at(mk, sd)], HOME]]));
   }
-  return answerQuery(chatId, builderQuery(mk, sd, rg, ct, dy, n, x), messageId);
+  if (ct === "?") {
+    return editText(chatId, messageId, `${head}Which country?`, keyboard([...countryKb(rg, matches, (c) => at(mk, sd, dy, rg, c)), [["⬅️ Back", at(mk, sd, dy, rg, "*")], HOME]]));
+  }
+  const listBack = ct === "*" ? at(mk, sd, dy) : at(mk, sd, dy, rg, "?");
+  const inList = inScope(matches, sc);
+
+  if (!mt || mt.startsWith("p")) {
+    if (!inList.length) return editText(chatId, messageId, `${head}No matches left ${dayWord} there.`, keyboard([[["⬅️ Back", listBack], HOME]]));
+    const v = matchListView({
+      matches: inList, page: pageOf(mt), weekend: dy === "we",
+      allBtn: [`✅ All ${inList.length}`, at(mk, sd, dy, rg, ct, "a")],
+      countryBtn: rg !== "all" && ct === "*" ? ["🏳️ By country", at(mk, sd, dy, rg, "?")] : null,
+      pick: (m) => at(mk, sd, dy, rg, ct, m.id),
+      pageTo: (p) => at(mk, sd, dy, rg, ct, `p${p}`),
+      note: "Tap ✅ All to rank every match, or a match to see its numbers.",
+    });
+    return editText(chatId, messageId, `${head}${v.text}`, keyboard([...v.rows, [["⬅️ Back", listBack], HOME]]));
+  }
+  if (mt === "a") {
+    if (!n) return editText(chatId, messageId, `${head}How many matches?`, keyboard([COUNTS.map(([c, l]) => [l, at(mk, sd, dy, rg, ct, "a", c)]), [["⬅️ Back", at(mk, sd, dy, rg, ct)], HOME]]));
+    return answerQuery(chatId, builderQuery(mk, sd, dy, rg, ct, n), messageId);
+  }
+  const match = inList.find((m) => m.id === mt);
+  if (!match) return editText(chatId, messageId, `${head}That match has kicked off or is no longer listed.`, keyboard([[["⬅️ Back to matches", at(mk, sd, dy, rg, ct)], HOME]]));
+  return answerMatch(chatId, messageId, { query: builderQuery(mk, sd, dy, rg, ct), match, back: at(mk, sd, dy, rg, ct) });
+}
+
+// One picked match: the chosen market's model % (+ best book price) and the match's
+// headline numbers. The % bar doesn't apply — the user asked about this game.
+async function answerMatch(chatId, messageId, { query, match, back }) {
+  const lg = LEAGUES_BY_ID[String(match.leagueId)];
+  const title = `📍 <b>${esc(match.home)} v ${esc(match.away)}</b>\n${lg?.flag || ""} ${esc(lg?.name || "")} · ${esc(ko(match.kickoff))}`;
+  await editText(chatId, messageId, `${title}\n\n⏳ Running the model…`);
+  let text;
+  try {
+    const r = await runAsk(query, botTz(), { ...BOT_SCOPE, only: { fixtureIds: [match.id], leagueIds: [String(match.leagueId)] } });
+    const m = r.matches?.[0];
+    if (r.note) text = `${title}\n\n${esc(r.note)}`;
+    else if (!m) text = `${title}\n\nNo model numbers for this match yet (team data still loading) — try again in a minute.`;
+    else {
+      remember(chatId, query, r);
+      const legs = Object.values(m.markets).map((l) => `⚽ ${esc(l.label)}: ${esc(l.selection)} <b>${l.prob}%</b>${l.odds != null ? ` @${Number(l.odds).toFixed(2)}${l.bookmaker ? ` (${esc(l.bookmaker)})` : ""}` : " · no book price yet"}`);
+      const x = m.model || {};
+      const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
+      const snap = [
+        `Home ${pct(x.home)} · Draw ${pct(x.draw)} · Away ${pct(x.away)}`,
+        x.xgHome != null ? `xG ${x.xgHome} – ${x.xgAway} · Over 2.5 ${pct(x.over25)} · BTTS ${pct(x.btts)}` : null,
+        x.homeForm || x.awayForm ? `Form: ${esc(match.home)} ${esc(x.homeForm || "–")} · ${esc(match.away)} ${esc(x.awayForm || "–")}` : null,
+      ].filter(Boolean);
+      text = `${title}\n\n${legs.join("\n")}\n\n<b>Model</b>\n${snap.join("\n")}`;
+    }
+  } catch (e) {
+    text = `${title}\n\n⚠️ Something went wrong: ${esc(e.message)}`;
+  }
+  return deliver(chatId, messageId, [text], keyboard([[["⬅️ Back to matches", back], ["🔎 New search", "fp"]], [HOME]]));
 }
 
 // ---- Slips + results (read from the app's own API, which is edge-cached) ----------
@@ -446,29 +549,51 @@ const ACCA_LEGS = [["0", "🎯 Best chance"], ["2", "2 legs"], ["3", "3 legs"], 
 
 const ACCA_SIDES = [["h", "🏠 Home teams", "home teams"], ["a", "✈️ Away teams", "away teams"], ["e", "Any", ""]];
 
+// Build an acca: target › side › day › region › match list (✅ use all / 🏳️ by
+// country) › legs. callback: ac|tg|sd|dy|rg|ct|mt|lg — mt = "p<page>" | "a".
 async function accaFlow(chatId, messageId, parts) {
-  const [tg_, sd, rg, ct, dy, lg] = parts;
-  if ((tg_ && !find(ACCA_TARGETS, tg_)) || (sd && !find(ACCA_SIDES, sd)) || !validRegion(rg, ct) || (dy && !find(DAYS, dy)) || (lg && !find(ACCA_LEGS, lg))) return showMenu(chatId, messageId);
-  const crumbs = [tg_ && `target ${find(ACCA_TARGETS, tg_)[1]}`, sd && sd !== "e" ? find(ACCA_SIDES, sd)[1] : null, ct ? regionParts(rg, ct)?.label : regionOf(rg)?.label, find(DAYS, dy)?.[1], find(ACCA_LEGS, lg)?.[1]].filter(Boolean);
+  const [tg_, sd, dy, rg, ct, mt, lg] = parts;
+  if ((tg_ && !find(ACCA_TARGETS, tg_)) || (sd && !find(ACCA_SIDES, sd)) || (dy && !find(DAYS, dy)) || !validScope(rg, ct) || (lg && !find(ACCA_LEGS, lg))) return showMenu(chatId, messageId);
+  const sc = rg ? scopeOf(rg, ct) : null;
+  const crumbs = [tg_ && `target ${find(ACCA_TARGETS, tg_)[1]}`, sd && sd !== "e" ? find(ACCA_SIDES, sd)[1] : null, find(DAYS, dy)?.[1], sc?.label, find(ACCA_LEGS, lg)?.[1]].filter(Boolean);
   const head = `🧮 <b>Build an acca</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
   const at = (...p) => ["ac", ...p].join("|");
-  const prev = parts.slice(0, -1);
-  if (prev.length === 3 && prev[2] === "all") prev.length = 2;
-  const nav = [["⬅️ Back", parts.length ? at(...prev) : "m"], HOME];
   if (!tg_) return editText(chatId, messageId, `${head}What combined odds are you after?`, keyboard([ACCA_TARGETS.map(([c, l]) => [l, at(c)]), [HOME]]));
   if (!sd) {
     return editText(chatId, messageId, `${head}Legs on home teams, away teams, or any?\n<i>Home/away picks use to win, double chance and team-to-score legs.</i>`,
-      keyboard([ACCA_SIDES.map(([c, l]) => [l, at(tg_, c)]), nav]));
+      keyboard([ACCA_SIDES.map(([c, l]) => [l, at(tg_, c)]), [["⬅️ Back", "ac"], HOME]]));
   }
-  if (!rg) return editText(chatId, messageId, `${head}Which region?`, keyboard([...regionRows((...p) => at(tg_, sd, ...p)), nav]));
-  if (!ct) return editText(chatId, messageId, `${head}Which country?`, keyboard([...countryRows(rg, (c) => at(tg_, sd, rg, c)), nav]));
-  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(tg_, sd, rg, ct, c)]), nav]));
+  if (!dy) return editText(chatId, messageId, `${head}Which day?`, keyboard([DAYS.map(([c, l]) => [l, at(tg_, sd, c)]), [["⬅️ Back", at(tg_)], HOME]]));
+
+  let matches;
+  try { matches = await dayMatches(dy); } catch (e) { return editText(chatId, messageId, `⚠️ Couldn't load fixtures: ${esc(e.message)}`, keyboard([[HOME]])); }
+  const dayWord = find(DAYS, dy)[1].toLowerCase();
+  if (!rg) {
+    if (!matches.length) return editText(chatId, messageId, `${head}No featured matches left ${dayWord}.`, keyboard([[["⬅️ Back", at(tg_, sd)], HOME]]));
+    return editText(chatId, messageId, `${head}Which region? <i>(matches in brackets)</i>`, keyboard([...regionKb(matches, (r) => at(tg_, sd, dy, r, "*")), [["⬅️ Back", at(tg_, sd)], HOME]]));
+  }
+  if (ct === "?") {
+    return editText(chatId, messageId, `${head}Which country?`, keyboard([...countryKb(rg, matches, (c) => at(tg_, sd, dy, rg, c)), [["⬅️ Back", at(tg_, sd, dy, rg, "*")], HOME]]));
+  }
+  const listBack = ct === "*" ? at(tg_, sd, dy) : at(tg_, sd, dy, rg, "?");
+  const inList = inScope(matches, sc);
+  if (!mt || mt.startsWith("p")) {
+    if (!inList.length) return editText(chatId, messageId, `${head}No matches left ${dayWord} there.`, keyboard([[["⬅️ Back", listBack], HOME]]));
+    const v = matchListView({
+      matches: inList, page: pageOf(mt), weekend: dy === "we",
+      allBtn: [`✅ Use all ${inList.length}`, at(tg_, sd, dy, rg, ct, "a")],
+      countryBtn: rg !== "all" && ct === "*" ? ["🏳️ By country", at(tg_, sd, dy, rg, "?")] : null,
+      pageTo: (p) => at(tg_, sd, dy, rg, ct, `p${p}`),
+      note: "I pick the legs from these matches (one per match).",
+    });
+    return editText(chatId, messageId, `${head}${v.text}`, keyboard([...v.rows, [["⬅️ Back", listBack], HOME]]));
+  }
+  if (mt !== "a") return showMenu(chatId, messageId);
   if (lg == null) {
     return editText(chatId, messageId, `${head}How many legs? “Best chance” lets me pick the count with the highest chance of landing.`,
-      keyboard([...grid(ACCA_LEGS.map(([c, l]) => [l, at(tg_, sd, rg, ct, dy, c)]), 3), nav]));
+      keyboard([...grid(ACCA_LEGS.map(([c, l]) => [l, at(tg_, sd, dy, rg, ct, "a", c)]), 3), [["⬅️ Back", at(tg_, sd, dy, rg, ct)], HOME]]));
   }
-  const r = regionParts(rg, ct);
-  const scopeQ = [find(ACCA_SIDES, sd)[2], r.scope, find(DAYS, dy)[2], r.only].filter(Boolean).join(" ");
+  const scopeQ = [find(ACCA_SIDES, sd)[2], sc.scope, find(DAYS, dy)[2], sc.only].filter(Boolean).join(" ");
   return answerAcca(chatId, scopeQ, { target: Number(tg_), max: 0, legs: Number(lg) }, messageId);
 }
 
@@ -543,11 +668,14 @@ export async function answerProps(chatId, messageId, { mk, tier, dayCode, league
   } catch (e) {
     chunks = [`⚠️ Couldn't load player props: ${esc(e.message)}`];
   }
-  return deliver(chatId, messageId, chunks, keyboard([[["🌍 Another country", back || `pp|${mk}|${tier}|${dayCode}`], ["🎯 Another market", "pp"]], [HOME]]));
+  return deliver(chatId, messageId, chunks, keyboard([[["⬅️ Back to matches", back || `pp|${mk}|${tier}|${dayCode}`], ["🎯 Another market", "pp"]], [HOME]]));
 }
 
+// Player props: market › tier › day › region › match list → one match, ✅ All (when
+// small enough — cold props are slow), or 🏳️ by country first.
+// callback: pp|mk|tier|day|rg|ct|mt — mt = "p<page>" | "a" | fixture id.
 async function propsFlow(chatId, messageId, parts) {
-  const [mk, tierRaw, dayCode, rg, ct] = parts;
+  const [mk, tierRaw, dayCode, rg, ct, mt] = parts;
   const pm = mk && find(PROP_MARKETS, mk);
   if (mk && !pm) return showMenu(chatId, messageId);
   const at = (...p) => ["pp", ...p].join("|");
@@ -555,8 +683,9 @@ async function propsFlow(chatId, messageId, parts) {
   const tier = tierRaw ? Number(tierRaw) : pm && pm[3].length === 1 ? pm[3][0] : null;
   if (tier && pm && !pm[3].includes(tier)) return showMenu(chatId, messageId);
   if (dayCode && !find(PROP_DAYS, dayCode)) return showMenu(chatId, messageId);
-  if (rg && !regionOf(rg)) return showMenu(chatId, messageId);
-  const crumbs = [pm?.[1], tier && pm?.[3].length > 1 ? `${tier}+` : null, find(PROP_DAYS, dayCode)?.[1], regionOf(rg)?.label].filter(Boolean);
+  if (!validScope(rg, ct)) return showMenu(chatId, messageId);
+  const sc = rg ? scopeOf(rg, ct) : null;
+  const crumbs = [pm?.[1], tier && pm?.[3].length > 1 ? `${tier}+` : null, find(PROP_DAYS, dayCode)?.[1], sc?.label].filter(Boolean);
   const head = `🎯 <b>Player props</b>${crumbs.length ? `\n${esc(crumbs.join(" › "))}` : ""}\n\n`;
 
   if (!pm) return editText(chatId, messageId, `${head}Which market?`, keyboard([...grid(PROP_MARKETS.map(([c, l]) => [l, at(c)]), 2), [HOME]]));
@@ -567,38 +696,43 @@ async function propsFlow(chatId, messageId, parts) {
   const tierBack = pm[3].length > 1 ? at(mk) : "pp";
   if (!dayCode) return editText(chatId, messageId, `${head}Which day?`, keyboard([PROP_DAYS.map(([c, l]) => [l, at(mk, tier, c)]), [["⬅️ Back", tierBack], HOME]]));
 
-  await editText(chatId, messageId, `${head}⏳ Finding fixtures with player data…`);
+  if (!rg) await editText(chatId, messageId, `${head}⏳ Finding fixtures with player data…`);
   let info;
   try { info = await propsLeagues(dayCode); } catch (e) { return editText(chatId, messageId, `⚠️ Couldn't load fixtures: ${esc(e.message)}`, keyboard([[HOME]])); }
+  const matches = info.matches.map((m) => ({ id: String(m.id), leagueId: String(m.leagueId), home: m.home, away: m.away, kickoff: m.kickoff }));
   const dayWord = find(PROP_DAYS, dayCode)[1].toLowerCase();
 
   if (!rg) {
-    const regions = BOT_REGIONS.map((r) => ({ r, n: info.count(r.ids) })).filter((x) => x.n);
-    if (!regions.length) return editText(chatId, messageId, `${head}No featured fixtures with player data ${dayWord}.`, keyboard([[["⬅️ Back", at(mk, tier)], HOME]]));
-    return editText(chatId, messageId, `${head}Which region? <i>(matches in brackets)</i>`,
-      keyboard([...grid(regions.map(({ r, n }) => [`${r.label} (${n})`, at(mk, tier, dayCode, r.code)]), 1), [["⬅️ Back", at(mk, tier)], HOME]]));
+    if (!matches.length) return editText(chatId, messageId, `${head}No featured fixtures with player data ${dayWord}.`, keyboard([[["⬅️ Back", at(mk, tier)], HOME]]));
+    return editText(chatId, messageId, `${head}Which region? <i>(matches in brackets)</i>`, keyboard([...regionKb(matches, (r) => at(mk, tier, dayCode, r, "*")), [["⬅️ Back", at(mk, tier)], HOME]]));
   }
-
-  const region = regionOf(rg);
-  const countries = regionCountries(rg).map((c, i) => ({ c, i, ids: c.ids.filter((id) => info.leagues.some((l) => String(l.id) === id)) }))
-    .map((x) => ({ ...x, n: info.count(x.ids) })).filter((x) => x.n);
-  if (!ct) {
-    if (!countries.length) return editText(chatId, messageId, `${head}No ${region.label} fixtures with player data ${dayWord}.`, keyboard([[["⬅️ Back", at(mk, tier, dayCode)], HOME]]));
-    const total = countries.reduce((s, x) => s + x.n, 0);
-    const rows = [
-      ...(total <= PROPS_ALL_MAX ? [[[`All of ${region.label} (${total})`, at(mk, tier, dayCode, rg, "*")]]] : []),
-      ...grid(countries.map(({ c, i, n }) => [`${c.flag} ${c.name} (${n})`, at(mk, tier, dayCode, rg, String(i))]), 2),
-      [["⬅️ Back", at(mk, tier, dayCode)], HOME],
-    ];
-    return editText(chatId, messageId, `${head}Which country? <i>(matches in brackets)</i>`, keyboard(rows));
+  if (ct === "?") {
+    return editText(chatId, messageId, `${head}Which country?`, keyboard([...countryKb(rg, matches, (c) => at(mk, tier, dayCode, rg, c)), [["⬅️ Back", at(mk, tier, dayCode, rg, "*")], HOME]]));
   }
+  const listBack = ct === "*" ? at(mk, tier, dayCode) : at(mk, tier, dayCode, rg, "?");
+  const inList = inScope(matches, sc);
+  const canAll = inList.length <= PROPS_ALL_MAX;
 
-  const pick = ct === "*" ? { ids: countries.flatMap((x) => x.ids), label: region.label } : (() => {
-    const x = countries.find((y) => String(y.i) === ct);
-    return x ? { ids: x.ids, label: `${x.c.flag} ${x.c.name}` } : null;
-  })();
-  if (!pick || !pick.ids.length) return showMenu(chatId, messageId);
-  return answerProps(chatId, messageId, { mk, tier, dayCode, leagueIds: pick.ids, scopeLabel: pick.label, back: at(mk, tier, dayCode, rg) });
+  if (!mt || mt.startsWith("p")) {
+    if (!inList.length) return editText(chatId, messageId, `${head}No matches with player data ${dayWord} there.`, keyboard([[["⬅️ Back", listBack], HOME]]));
+    const v = matchListView({
+      matches: inList, page: pageOf(mt), weekend: false,
+      allBtn: canAll ? [`✅ All ${inList.length}`, at(mk, tier, dayCode, rg, ct, "a")] : null,
+      countryBtn: rg !== "all" && ct === "*" ? ["🏳️ By country", at(mk, tier, dayCode, rg, "?")] : null,
+      pick: (m) => at(mk, tier, dayCode, rg, ct, m.id),
+      pageTo: (p) => at(mk, tier, dayCode, rg, ct, `p${p}`),
+      note: canAll ? "Tap ✅ All for the top 5 across every match, or one match." : `Too many to rank at once (max ${PROPS_ALL_MAX}) — pick a match or narrow by country.`,
+    });
+    return editText(chatId, messageId, `${head}${v.text}`, keyboard([...v.rows, [["⬅️ Back", listBack], HOME]]));
+  }
+  const back = at(mk, tier, dayCode, rg, ct);
+  if (mt === "a") {
+    if (!canAll) return showMenu(chatId, messageId);
+    const ids = [...new Set(inList.map((m) => m.leagueId))];
+    return answerProps(chatId, messageId, { mk, tier, dayCode, leagueIds: ids, scopeLabel: sc.label, back });
+  }
+  if (!inList.some((m) => m.id === mt)) return editText(chatId, messageId, `${head}That match has kicked off or is no longer listed.`, keyboard([[["⬅️ Back to matches", back], HOME]]));
+  return answerProps(chatId, messageId, { mk, tier, dayCode, matchId: mt, back });
 }
 
 // ---- Daily list -------------------------------------------------------------------
