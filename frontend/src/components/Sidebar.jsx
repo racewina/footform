@@ -323,6 +323,20 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
           <button
             style={{
               ...styles.todayItem,
+              ...(String(selectedId) === "euro-domestic" ? styles.todayItemActive : {}),
+            }}
+            onClick={() => {
+              onSelect("euro-domestic");
+              onClose?.();
+            }}
+          >
+            <span style={styles.todayIcon}>🇪🇺</span>
+            <span style={styles.itemName}>Europe → Domestic</span>
+          </button>
+
+          <button
+            style={{
+              ...styles.todayItem,
               ...(String(selectedId) === "blend-bets" ? styles.todayItemActive : {}),
             }}
             onClick={() => {

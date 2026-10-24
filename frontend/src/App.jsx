@@ -206,6 +206,7 @@ const LEAGUE_NAMES = {
   "corner-gen": { name: "Corner Generator", flag: "⛳" },
   "event-gen": { name: "Event Generator", flag: "⚡" },
   "europe-strongest": { name: "Europe Strongest Matches", flag: "🌍" },
+  "euro-domestic": { name: "Europe → Domestic", flag: "🇪🇺" },
   "team2plus-scan": { name: "2+ Goals Scan", flag: "📊" },
   "team2plus-all": { name: "Team 2+ Goals", flag: "⚽" },
   "team2plus-eng": { name: "England 2+ Goals", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },

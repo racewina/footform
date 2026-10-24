@@ -1182,6 +1182,138 @@ router.get("/today", async (req, res) => {
   }
 });
 
+// ---- Europe → Domestic ------------------------------------------------------------
+//
+// Every club that played (or plays) in the Champions, Europa or Conference League this
+// week (Mon–Sun in the viewer's timezone), with its NEXT domestic league match — the
+// same fixture cards, predictions and markets as Today's Matches. Each fixture carries
+// `euro.home` / `euro.away`: the European game that side played this week, so the
+// card can show the turnaround (days between the two kick-offs).
+//
+// Fixture discovery is one fixtures-by-date call per day (week + the next 9 days,
+// cached 10 min each); predictions come from the regular per-league day builds, built
+// progressively under a time budget like /today (partial → the client polls).
+const UEFA_COMPS = { "2": "UCL", "3": "UEL", "848": "UECL" };
+const NON_DOMESTIC = new Set(["2", "3", "848", "13", "11", "772", "1", "10", "667", "4", "5", "531", "15"]);
+const DOMESTIC_LOOKAHEAD_DAYS = 9;
+
+async function fixturesOnDateCached(date) {
+  const key = `fbd:${date}`;
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  const list = await fetchFixturesByDate(date);
+  cacheSet(key, list, 10 * 60);
+  return list;
+}
+
+router.get("/euro-domestic", async (req, res) => {
+  const tz = req.query.tz;
+  const today = formatDate(new Date(), tz);
+  const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sun
+  const weekFrom = shiftN(today, -((dow + 6) % 7)); // Monday
+  const weekTo = shiftN(weekFrom, 6);
+
+  const cacheKey = `euro-domestic:${today}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    const weekDates = Array.from({ length: 7 }, (_, i) => shiftN(weekFrom, i));
+    const aheadDates = Array.from({ length: DOMESTIC_LOOKAHEAD_DAYS + 1 }, (_, i) => shiftN(today, i));
+    // UTC dates around the local window so tz day-boundaries are covered.
+    const utc = [...new Set([shiftN(weekFrom, -1), ...weekDates, ...aheadDates, shiftN(aheadDates[aheadDates.length - 1], 1)])].sort();
+    const all = (await Promise.all(utc.map((d) => fixturesOnDateCached(d).catch(() => [])))).flat();
+    const seen = new Set();
+    const fixtures = all.filter((f) => f.startTimestamp && !seen.has(f.id) && seen.add(f.id));
+    const localDate = (f) => formatDate(new Date(f.startTimestamp * 1000), tz);
+
+    // 1) This week's European ties → each team's European game.
+    const euroOf = new Map(); // teamId -> { comp, leagueId, opponent, ts, date, home, status, score }
+    for (const f of fixtures) {
+      const comp = UEFA_COMPS[String(f.leagueId)];
+      if (!comp) continue;
+      const d = localDate(f);
+      if (d < weekFrom || d > weekTo) continue;
+      for (const [id, opp, isHome] of [[f.homeId, f.away, true], [f.awayId, f.home, false]]) {
+        if (!id) continue;
+        const prev = euroOf.get(id);
+        if (!prev || f.startTimestamp > prev.ts) euroOf.set(id, { comp, leagueId: String(f.leagueId), opponent: opp, ts: f.startTimestamp, date: d, home: isHome, name: isHome ? f.home : f.away });
+      }
+    }
+
+    // 2) Each team's next not-started domestic LEAGUE match we cover (no cups / cross-
+    //    league comps), from today through the lookahead window.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const nextOf = new Map(); // teamId -> fixture
+    for (const f of fixtures) {
+      const lid = String(f.leagueId);
+      const lg = LEAGUES_BY_ID[lid];
+      if (!lg || NON_DOMESTIC.has(lid) || CUP_RX.test(lg.name) || lg.friendly) continue;
+      if (f.status !== "notstarted" || f.startTimestamp < nowSec - 600) continue;
+      const d = localDate(f);
+      if (d < today || d > aheadDates[aheadDates.length - 1]) continue;
+      for (const id of [f.homeId, f.awayId]) {
+        if (!id || !euroOf.has(id)) continue;
+        const cur = nextOf.get(id);
+        if (!cur || f.startTimestamp < cur.startTimestamp) nextOf.set(id, f);
+      }
+    }
+    const missing = [...euroOf.entries()].filter(([id]) => !nextOf.has(id)).map(([, e]) => `${e.name} (${e.comp})`).sort();
+
+    // 3) Build the league-days those matches fall on and keep just those fixtures.
+    const wanted = new Map(); // fixture id -> fixture
+    for (const f of nextOf.values()) wanted.set(String(f.id), f);
+    const jobs = [...new Set([...wanted.values()].map((f) => `${f.leagueId}|${localDate(f)}`))]
+      .map((k) => k.split("|"));
+    const BUILD_BUDGET_MS = Number(process.env.TODAY_BUILD_BUDGET_MS || 45000);
+    const deadline = Date.now() + BUILD_BUDGET_MS;
+    const groups = new Map(); // leagueId -> { league, season, fixtures }
+    let pending = 0, cursor = 0;
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        const [lid, d] = jobs[cursor++];
+        try {
+          const g = Date.now() < deadline ? await buildLeagueDay(lid, d, tz) : await peekLeagueDay(lid, d, tz);
+          if (!g) { pending++; continue; }
+          for (const fx of g.fixtures || []) {
+            if (!wanted.has(String(fx.id))) continue;
+            const tag = (teamId) => {
+              const e = euroOf.get(teamId);
+              if (!e) return null;
+              // Calendar days between the two kick-offs (Wed → Sat = 3), in the viewer's tz.
+              const restDays = Math.round((Date.parse(`${localDate(fx)}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`)) / 86400000);
+              return { comp: e.comp, leagueId: e.leagueId, opponent: e.opponent, kickoff: e.ts, home: e.home, restDays };
+            };
+            if (!groups.has(lid)) groups.set(lid, { league: { ...g.league, continent: continentFor(g.league.country) }, season: g.season, fixtures: [] });
+            groups.get(lid).fixtures.push({ ...fx, euro: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } });
+          }
+        } catch (e) {
+          console.error(`[euro-domestic] ${lid} ${d}: ${e.message}`);
+          pending++;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, jobs.length || 1) }, worker));
+
+    const leagues = [...groups.values()]
+      .map((g) => ({ ...g, fixtures: g.fixtures.sort((a, b) => a.startTimestamp - b.startTimestamp) }))
+      .sort((a, b) => b.fixtures.length - a.fixtures.length);
+    const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
+    const partial = pending > 0;
+    const result = {
+      date: today, week: { from: weekFrom, to: weekTo },
+      teams: euroOf.size, withMatch: nextOf.size, missing,
+      totalMatches, leagues, partial, pending,
+    };
+    if (!partial) cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[euro-domestic] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cross-league "safe bets" view: from every scheduled match today, take the
 // single market the model is most confident in, then stack the safest of those
 // into accumulators that land in preset combined-odds ranges (3-5, 7-10).
