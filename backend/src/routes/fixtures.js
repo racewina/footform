@@ -1350,7 +1350,7 @@ async function getStandoutTeams() {
   if (hit) return hit;
   const leagues = LEAGUES.filter((l) => !NON_DOMESTIC.has(String(l.id)) && !CUP_RX.test(l.name) && !l.friendly && !/friendl/i.test(l.name));
   const teams = new Map();
-  let cursor = 0;
+  let cursor = 0, failed = 0;
   const worker = async () => {
     while (cursor < leagues.length) {
       const l = leagues[cursor++];
@@ -1375,6 +1375,7 @@ async function getStandoutTeams() {
         }
       } catch (err) {
         console.error(`[standouts] ${l.id}: ${err.message}`);
+        failed++;
       }
     }
   };
@@ -1400,8 +1401,12 @@ async function getStandoutTeams() {
     .filter((o) => clears(o, STANDOUT_BARS))
     .sort((x, y) => y.score - x.score)
     .map((o, i) => ({ ...o, rank: i + 1 }));
-  const out = { builtAt: Date.now(), leagues: leagues.length, teams: list };
-  if (list.length) cacheSet(cacheKey, out, TTL.TEAM_FORM);
+  // A league that failed to load (cold-start rate limiting) would silently drop its
+  // standouts, so an incomplete list is only held briefly and flagged — the route
+  // reports it as partial and the client's poll triggers a rebuild (the leagues that
+  // did load come straight from cache).
+  const out = { builtAt: Date.now(), leagues: leagues.length, failed, complete: failed === 0, teams: list };
+  if (list.length) cacheSet(cacheKey, out, failed ? 2 * 60 : TTL.TEAM_FORM);
   return out;
 }
 
@@ -1440,8 +1445,11 @@ router.get("/standouts", async (req, res) => {
       const t = byTeam.get(id);
       return t ? { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league } : null;
     };
-    const { leagues, totalMatches, partial, pending } = await buildPickedFixtures(wanted, tz,
+    const built = await buildPickedFixtures(wanted, tz,
       (fx) => ({ standout: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } }));
+    const { leagues, totalMatches } = built;
+    const pending = built.pending + st.failed;
+    const partial = pending > 0;
     const result = {
       date: from, from, to, days, standouts: st.teams.length, leaguesScanned: st.leagues,
       bars: { standout: STANDOUT_BARS, elite: ELITE_BARS }, totalMatches, leagues, partial, pending,
