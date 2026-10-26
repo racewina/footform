@@ -875,11 +875,12 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
       {(fixture.standout?.home || fixture.standout?.away) && (
         <div style={styles.euroTags}>
           {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
+            // Both sides get their season line; only standouts carry the #rank badge.
             const t = fixture.standout?.[side];
             if (!t) return null;
             return (
-              <span key={side} style={styles.euroTag} title={`${team?.name}: ${t.league} ${t.W}-${t.D}-${t.L}, scored in ${t.scoredPct}% of games, won ${t.homeWin}% at home and ${t.awayWin}% away. Last 6: ${t.form}`}>
-                <b style={styles.euroTagComp}>{t.elite ? "★" : ""}#{t.rank}</b> {team?.shortName || team?.name}: {t.W}-{t.D}-{t.L} · scored {t.scoredPct}% · H {t.homeWin}% · A {t.awayWin}%
+              <span key={side} style={{ ...styles.euroTag, ...(t.rank ? {} : styles.tagMuted) }} title={`${team?.name}${t.rank ? ` (standout #${t.rank})` : ""}: ${t.league} ${t.W}-${t.D}-${t.L}, scored in ${t.scoredPct}% of games, won ${t.homeWin}% at home and ${t.awayWin}% away. Last 6: ${t.form}`}>
+                {t.rank ? <b style={styles.euroTagComp}>{t.elite ? "★" : ""}#{t.rank}</b> : null} {team?.shortName || team?.name}: {t.W}-{t.D}-{t.L} · scored {t.scoredPct}% · H {t.homeWin}% · A {t.awayWin}%
               </span>
             );
           })}
@@ -1466,6 +1467,7 @@ const styles = {
   euroBannerSub: { fontSize: 12, color: "var(--text2)", lineHeight: 1.35 },
   euroTags: { display: "flex", flexWrap: "wrap", gap: 6, padding: "6px 16px 0" },
   euroTag: { fontSize: 11, color: "var(--text2)", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 7px", lineHeight: 1.4 },
+  tagMuted: { opacity: 0.7, background: "transparent" },
   euroTagComp: { color: "var(--accent)", fontWeight: 700, marginRight: 2 },
   todayTag: { fontSize: 11, color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 6px" },
   statusBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 24px 0", flexWrap: "wrap" },

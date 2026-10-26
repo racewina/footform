@@ -1383,6 +1383,18 @@ async function getStandoutTeams() {
 
   const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
   const clears = (r, bars) => r.scoredPct >= bars.scored && r.win >= bars.win && r.homeWin >= bars.home && r.awayWin >= bars.away;
+  // Every team's season line (not just standouts), so a card can show the opponent's
+  // numbers too. Plain object keyed by team id (cache-safe); a team in two of our
+  // leagues keeps the one with more games.
+  const allStats = {};
+  for (const r of teams.values()) {
+    if (r.P < 3 || (allStats[r.id] && allStats[r.id].P >= r.P)) continue;
+    allStats[r.id] = {
+      P: r.P, W: r.W, D: r.D, L: r.L, league: r.league,
+      win: pct(r.W, r.P), scoredPct: pct(r.scored, r.P), homeWin: pct(r.hW, r.hP), awayWin: pct(r.aW, r.aP),
+      form: r.last.slice().sort((x, y) => x[0] - y[0]).slice(-6).map((x) => x[1]).join(""),
+    };
+  }
   const list = [...teams.values()]
     .filter((r) => r.P >= 8 && r.hP >= 3 && r.aP >= 3)
     .map((r) => {
@@ -1405,7 +1417,7 @@ async function getStandoutTeams() {
   // standouts, so an incomplete list is only held briefly and flagged — the route
   // reports it as partial and the client's poll triggers a rebuild (the leagues that
   // did load come straight from cache).
-  const out = { builtAt: Date.now(), leagues: leagues.length, failed, complete: failed === 0, teams: list };
+  const out = { builtAt: Date.now(), leagues: leagues.length, failed, complete: failed === 0, teams: list, allStats };
   if (list.length) cacheSet(cacheKey, out, failed ? 2 * 60 : TTL.TEAM_FORM);
   return out;
 }
@@ -1441,9 +1453,12 @@ router.get("/standouts", async (req, res) => {
       if (f.status === "finished" && f.startTimestamp < nowSec - 3 * 3600) continue;
       wanted.set(String(f.id), f);
     }
+    // Standouts carry their rank; the other side gets the same season line without one.
     const tag = (id) => {
       const t = byTeam.get(id);
-      return t ? { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league } : null;
+      if (t) return { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league };
+      const o = st.allStats?.[id];
+      return o ? { rank: null, elite: false, ...o } : null;
     };
     const built = await buildPickedFixtures(wanted, tz,
       (fx) => ({ standout: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } }));
