@@ -29,7 +29,9 @@ async function fetchFixtures(leagueId, date) {
     leagueId === "today"
       ? `/api/today?date=${date}&tz=${tz}`
       : leagueId === "euro-domestic"
-      ? `/api/euro-domestic?tz=${tz}`
+      ? `/api/euro-domestic?tz=${tz}&from=${date}&days=${STANDOUT_WINDOW}`
+      : leagueId === "standouts"
+      ? `/api/standouts?tz=${tz}&from=${date}&days=${STANDOUT_WINDOW}`
       : `/api/fixtures/${leagueId}?date=${date}&tz=${tz}`;
   const res = await fetch(url);
   if (!res.ok) {
@@ -178,6 +180,9 @@ const STATUS_SEGMENTS = [
   { key: "finished", label: "Finished" },
 ];
 
+// Standout Teams + Europe → Domestic: fixtures are paged in windows of this many days.
+const STANDOUT_WINDOW = 3;
+
 // Europe → Domestic view: which European competition the side(s) played this week.
 const EURO_COMPS = [["UCL", "Champions League"], ["UEL", "Europa League"], ["UECL", "Conference League"]];
 
@@ -230,18 +235,31 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
     setLeagueFilter((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const dateInputRef = useRef(null);
   const dateStr = ymd(date);
-  // Europe → Domestic: every club from this week's Champions / Europa / Conference
-  // League with its next domestic league match. Not tied to the viewed date — it
-  // spans the coming days — so it reuses the cross-league list but swaps the date
-  // bar for a week banner and the kick-off hour filter for a day filter.
+  // Europe → Domestic: domestic league matches of clubs with a Champions / Europa /
+  // Conference League game within a week either side. Like Standout Teams it pages
+  // in 3-day windows instead of using the app-wide date, and swaps the kick-off hour
+  // filter for a day filter.
   const isEuroDom = leagueId === "euro-domestic";
   const [compFilter, setCompFilter] = useState("all"); // all | UCL | UEL | UECL (euro view)
-  const isToday = !isEuroDom && dateStr === ymd(startOfToday());
-  const isTodayView = leagueId === "today" || isEuroDom;
+  // Standout Teams: the season's outstanding sides (all leagues) and their fixtures,
+  // paged STANDOUT_WINDOW days at a time (Next › / ‹ Prev), starting today.
+  const isStandouts = leagueId === "standouts";
+  const [winOffset, setWinOffset] = useState(0); // windows ahead of today
+  const [eliteOnly, setEliteOnly] = useState(false);
+  const winStart = (() => { const d = startOfToday(); d.setDate(d.getDate() + winOffset * STANDOUT_WINDOW); return d; })();
+  const winEnd = (() => { const d = new Date(winStart); d.setDate(d.getDate() + STANDOUT_WINDOW - 1); return d; })();
+  const winStr = ymd(winStart);
+  // Each windowed section starts on the next 3 days.
+  useEffect(() => { setWinOffset(0); setHourFilter("all"); }, [leagueId]);
+  const multiDay = isEuroDom || isStandouts;
+  const isToday = !multiDay && dateStr === ymd(startOfToday());
+  const isTodayView = leagueId === "today" || multiDay;
+  // The date the response must be for (null = not date-keyed).
+  const viewKey = multiDay ? winStr : dateStr;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["fixtures", leagueId, isEuroDom ? "week" : dateStr],
-    queryFn: () => fetchFixtures(leagueId, dateStr),
+    queryKey: ["fixtures", leagueId, multiDay ? winStr : dateStr],
+    queryFn: () => fetchFixtures(leagueId, multiDay ? winStr : dateStr),
     placeholderData: (prev) => prev, // keep the list visible while a new date loads (v5)
     // A busy day returns progressively (partial slate + remaining leagues still
     // building server-side). Poll until it's complete so the rest fill in on
@@ -254,7 +272,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
 
   // True while a heavy day is still filling in server-side (biggest leagues
   // shown first; the rest arrive over the next few seconds).
-  const isPartial = !!data?.partial && (isEuroDom || data?.date === dateStr);
+  const isPartial = !!data?.partial && (viewKey == null || data?.date === viewKey);
 
   // While navigating to a new date, react-query keeps the PREVIOUS day's list on
   // screen (placeholderData) with isLoading=false — so a slow day (a cold cross-
@@ -262,7 +280,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   // endpoints echo the date they built for, so if it doesn't match the selected
   // day we're still loading it: show the spinner instead of the wrong-day list.
   const loadedDate = data?.date;
-  const showLoading = isLoading || (!isEuroDom && loadedDate != null && loadedDate !== dateStr);
+  const showLoading = isLoading || (viewKey != null && loadedDate != null && loadedDate !== viewKey);
 
   // Moving to a new day repopulates which leagues are playing, so drop the
   // league filter to avoid a stale selection that hides everything.
@@ -337,12 +355,14 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   // Kick-off hour buckets (Today view, any date): the distinct local kickoff
   // hours present that day, so you can zoom to "matches starting 6–7 AM" etc.
   const kickoffHour = (fx) => (fx.startTimestamp
-    ? (isEuroDom ? Number(ymd(new Date(fx.startTimestamp * 1000)).replace(/-/g, "")) : new Date(fx.startTimestamp * 1000).getHours())
+    ? (multiDay ? Number(ymd(new Date(fx.startTimestamp * 1000)).replace(/-/g, "")) : new Date(fx.startTimestamp * 1000).getHours())
     : null);
-  const bucketLabel = (h) => isEuroDom
+  const bucketLabel = (h) => multiDay
     ? new Date(Math.floor(h / 10000), Math.floor(h / 100) % 100 - 1, h % 100).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })
     : hourLabel(h);
-  const passComp = (fx) => !isEuroDom || compFilter === "all" || fx.euro?.home?.comp === compFilter || fx.euro?.away?.comp === compFilter;
+  const euroComps = (fx) => ["home", "away"].flatMap((sd) => [fx.euro?.[sd]?.prev?.comp, fx.euro?.[sd]?.next?.comp]);
+  const passComp = (fx) => (!isEuroDom || compFilter === "all" || euroComps(fx).includes(compFilter))
+    && (!isStandouts || !eliteOnly || fx.standout?.home?.elite || fx.standout?.away?.elite);
   const hourBuckets = isTodayView
     ? [...new Set(groups.flatMap((g) => g.fixtures.map(kickoffHour)).filter((h) => h != null))].sort((a, b) => a - b)
     : [];
@@ -448,23 +468,47 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
   return (
     <div style={styles.page}>
       <style>{pulseCSS}</style>
-      {isEuroDom ? (
-        <div className="ff-datebar" style={styles.dateBar}>
+      {multiDay ? (
+        <div className="ff-datebar" style={{ ...styles.dateBar, paddingRight: 52 }}>
+          <button
+            style={{ ...styles.navBtn, ...(winOffset === 0 ? { opacity: 0.35, cursor: "default" } : {}) }}
+            disabled={winOffset === 0}
+            onClick={() => { setHourFilter("all"); setLeagueFilter([]); setWinOffset((o) => Math.max(0, o - 1)); }}
+            aria-label="Previous 3 days"
+            title="Previous 3 days"
+          >
+            ‹
+          </button>
           <div style={styles.euroBanner}>
-            <span style={styles.euroBannerTitle}>🇪🇺 Europe → Domestic</span>
+            <span style={styles.euroBannerTitle}>
+              {winStart.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+              {" – "}
+              {winEnd.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+              {winOffset === 0 && <span style={{ ...styles.todayTag, marginLeft: 8 }}>Next 3 days</span>}
+            </span>
             <span style={styles.euroBannerSub}>
-              {data?.week
-                ? `Clubs from this week's Champions, Europa & Conference League (${new Date(`${data.week.from}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })}–${new Date(`${data.week.to}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })}) · their next domestic league match`
-                : "Clubs from this week's Champions, Europa & Conference League · their next domestic league match"}
+              {isEuroDom
+                ? "League matches of clubs with a Champions, Europa or Conference League game within a week"
+                : data?.standouts != null
+                ? `Fixtures for the season's ${data.standouts} standout teams across ${data.leaguesScanned} leagues`
+                : "Fixtures for the season's standout teams across all leagues"}
             </span>
           </div>
+          <button
+            style={styles.navBtn}
+            onClick={() => { setHourFilter("all"); setLeagueFilter([]); setWinOffset((o) => o + 1); }}
+            aria-label="Next 3 days"
+            title="Next 3 days"
+          >
+            ›
+          </button>
           <button
             className="ff-infobtn"
             style={styles.infoBtn}
             onClick={() => setNoteOpen((o) => !o)}
             aria-expanded={noteOpen}
-            aria-label="About these predictions"
-            title="About these predictions"
+            aria-label="About this section"
+            title="About this section"
           >
             ⓘ
           </button>
@@ -536,9 +580,9 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
           <div style={styles.rightCluster}>
             {isTodayView && hourBuckets.length > 1 && (
               <label style={styles.withinField}>
-                <span style={styles.withinLabel}>{isEuroDom ? "Day" : "Kick-off"}</span>
+                <span style={styles.withinLabel}>{multiDay ? "Day" : "Kick-off"}</span>
                 <select style={styles.withinSelect} value={hourFilter} onChange={(e) => setHourFilter(e.target.value)}>
-                  <option value="all">{isEuroDom ? "Any day" : "Any time"}</option>
+                  <option value="all">{multiDay ? "Any day" : "Any time"}</option>
                   {hourBuckets.map((h) => <option key={h} value={h}>{bucketLabel(h)}</option>)}
                 </select>
               </label>
@@ -582,6 +626,24 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {!showLoading && !isError && totalFixtures > 0 && isStandouts && (
+        <div className="ff-continentbar" style={styles.continentBar}>
+          <button
+            style={{ ...styles.contChip, ...(!eliteOnly ? styles.contChipActive : {}) }}
+            onClick={() => { setEliteOnly(false); setLeagueFilter([]); }}
+          >
+            All standouts
+          </button>
+          <button
+            title="Scored in 90%+ of league games, won 65%+, 60%+ at home, 55%+ away"
+            style={{ ...styles.contChip, ...(eliteOnly ? styles.contChipActive : {}) }}
+            onClick={() => { setEliteOnly(true); setLeagueFilter([]); }}
+          >
+            ★ Elite only
+          </button>
         </div>
       )}
 
@@ -675,13 +737,23 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
             Predictions come from our in-house model, refreshed continuously with
             the latest data. They may update up to 30&nbsp;minutes before kickoff as
             confirmed team news comes in. Estimates only — not betting advice.
+            {isStandouts && data?.bars && (
+              <>
+                {" "}Standout teams clear all four bars in their league games this season: scored in
+                {" "}{data.bars.standout.scored}%+ of games, won {data.bars.standout.win}%+, won {data.bars.standout.home}%+ at
+                home and {data.bars.standout.away}%+ away (min 8 games). ★ Elite: {data.bars.elite.scored} / {data.bars.elite.win} /
+                {" "}{data.bars.elite.home} / {data.bars.elite.away}. #rank = season ranking. Shows all their fixtures in the
+                window, cups and Europe included.
+              </>
+            )}
             {isEuroDom && data?.teams != null && (
               <>
-                {" "}This week {data.teams} clubs played in Europe; {data.withMatch} have their next
-                domestic league match here (rest days = calendar days since their European game).
+                {" "}{data.teams} clubs play in Europe around these dates; {data.withMatch} have a domestic
+                league match in this window. Tags show each club's European game before it (days of rest)
+                and after it (days until), within {data.nearDays} days.
                 {data.missing?.length ? (
                   <details style={{ marginTop: 4 }}>
-                    <summary style={{ cursor: "pointer" }}>{data.missing.length} clubs not covered (their league isn't in the app)</summary>
+                    <summary style={{ cursor: "pointer" }}>{data.missing.length} European clubs not covered (their league isn't in the app)</summary>
                     {data.missing.join(", ")}
                   </details>
                 ) : null}
@@ -703,8 +775,10 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
         {!showLoading && !isError && visibleCount === 0 && (
           <p style={styles.empty}>
             {totalFixtures === 0
-              ? isEuroDom
-                ? "No upcoming domestic matches for this week's European clubs yet."
+              ? isStandouts
+                ? "No standout-team fixtures in these 3 days — tap › for the next 3."
+                : isEuroDom
+                ? "No league matches for European clubs in these 3 days — tap › for the next 3."
                 : isTodayView
                 ? "No matches scheduled across any league on this date."
                 : "No fixtures on this date."
@@ -724,7 +798,7 @@ export default function FixturesPage({ leagueId, date, onDateChange, focusMatchI
               live={liveMap.get(fx.id)}
               focused={String(fx.id) === String(focusMatchId)}
               showLeague
-              multiDay={isEuroDom}
+              multiDay={multiDay}
             />
           ))}
 
@@ -798,16 +872,38 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
           <span style={styles.cardLeagueName}>{league.name}</span>
         </div>
       )}
+      {(fixture.standout?.home || fixture.standout?.away) && (
+        <div style={styles.euroTags}>
+          {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
+            const t = fixture.standout?.[side];
+            if (!t) return null;
+            return (
+              <span key={side} style={styles.euroTag} title={`${team?.name}: ${t.league} ${t.W}-${t.D}-${t.L}, scored in ${t.scoredPct}% of games, won ${t.homeWin}% at home and ${t.awayWin}% away. Last 6: ${t.form}`}>
+                <b style={styles.euroTagComp}>{t.elite ? "★" : ""}#{t.rank}</b> {team?.shortName || team?.name}: {t.W}-{t.D}-{t.L} · scored {t.scoredPct}% · H {t.homeWin}% · A {t.awayWin}%
+              </span>
+            );
+          })}
+        </div>
+      )}
       {(fixture.euro?.home || fixture.euro?.away) && (
         <div style={styles.euroTags}>
           {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
             const e = fixture.euro?.[side];
             if (!e) return null;
-            const when = new Date(e.kickoff * 1000).toLocaleDateString(undefined, { weekday: "short" });
-            const rest = e.restDays > 0 ? `${e.restDays}d rest` : e.restDays < 0 ? "Europe after this" : "same day";
+            const day = (g) => new Date(g.kickoff * 1000).toLocaleDateString(undefined, { weekday: "short" });
+            const vs = (g) => `${g.home ? "v" : "@"} ${g.opponent}`;
+            const parts = [
+              e.prev && `${vs(e.prev)} (${day(e.prev)}) · ${e.prev.days ? `${e.prev.days}d rest` : "same day"}`,
+              e.next && `${e.prev ? "next " : ""}${e.prev && e.next.comp !== e.prev.comp ? `${e.next.comp} ` : ""}${vs(e.next)} (${day(e.next)}) · in ${e.next.days}d`,
+            ].filter(Boolean);
+            const comp = (e.prev || e.next).comp;
+            const title = [
+              e.prev && `${team?.name} played ${e.prev.home ? "at home to" : "away at"} ${e.prev.opponent} in the ${e.prev.comp} ${e.prev.days} day(s) before`,
+              e.next && `${team?.name} play ${e.next.home ? "at home to" : "away at"} ${e.next.opponent} in the ${e.next.comp} ${e.next.days} day(s) after`,
+            ].filter(Boolean).join("; ");
             return (
-              <span key={side} style={styles.euroTag} title={`${team?.name} played ${e.home ? "at home to" : "away at"} ${e.opponent} in the ${e.comp} (${when})`}>
-                <b style={styles.euroTagComp}>{e.comp}</b> {team?.shortName || team?.name}: {e.home ? "v" : "@"} {e.opponent} ({when}) · {rest}
+              <span key={side} style={styles.euroTag} title={title}>
+                <b style={styles.euroTagComp}>{comp}</b> {team?.shortName || team?.name}: {parts.join(" · ")}
               </span>
             );
           })}

@@ -1184,18 +1184,19 @@ router.get("/today", async (req, res) => {
 
 // ---- Europe → Domestic ------------------------------------------------------------
 //
-// Every club that played (or plays) in the Champions, Europa or Conference League this
-// week (Mon–Sun in the viewer's timezone), with its NEXT domestic league match — the
-// same fixture cards, predictions and markets as Today's Matches. Each fixture carries
-// `euro.home` / `euro.away`: the European game that side played this week, so the
-// card can show the turnaround (days between the two kick-offs).
+// Domestic LEAGUE matches of clubs playing in the Champions, Europa or Conference
+// League, paged in date windows (from + days, like Standout Teams). A club's league
+// match is listed when it has a European game within EURO_NEAR_DAYS of it — before
+// (the turnaround: days of rest) or after (the next European game: days until it).
+// Same fixture cards, predictions and markets as Today's Matches; each fixture carries
+// `euro.home` / `euro.away` = { prev, next } for the card's tags.
 //
-// Fixture discovery is one fixtures-by-date call per day (week + the next 9 days,
+// Fixture discovery is one fixtures-by-date call per day (the window ± EURO_NEAR_DAYS,
 // cached 10 min each); predictions come from the regular per-league day builds, built
 // progressively under a time budget like /today (partial → the client polls).
 const UEFA_COMPS = { "2": "UCL", "3": "UEL", "848": "UECL" };
 const NON_DOMESTIC = new Set(["2", "3", "848", "13", "11", "772", "1", "10", "667", "4", "5", "531", "15"]);
-const DOMESTIC_LOOKAHEAD_DAYS = 9;
+const EURO_NEAR_DAYS = 7;
 
 async function fixturesOnDateCached(date) {
   const key = `fbd:${date}`;
@@ -1206,110 +1207,249 @@ async function fixturesOnDateCached(date) {
   return list;
 }
 
+// Build the league-days that the `wanted` fixtures (Map id → { leagueId,
+// startTimestamp }) fall on and return just those fixtures, grouped by league like
+// /today, each extended with `decorate(fx)`. Progressive under a time budget like
+// /today: league-days not reached in time count as `pending` (→ partial, the client
+// polls) and are served from the store/cache on the next request.
+async function buildPickedFixtures(wanted, tz, decorate) {
+  const localDate = (f) => formatDate(new Date(f.startTimestamp * 1000), tz);
+  const jobs = [...new Set([...wanted.values()].map((f) => `${f.leagueId}|${localDate(f)}`))].map((k) => k.split("|"));
+  const BUILD_BUDGET_MS = Number(process.env.TODAY_BUILD_BUDGET_MS || 45000);
+  const deadline = Date.now() + BUILD_BUDGET_MS;
+  const groups = new Map(); // leagueId -> { league, season, fixtures }
+  let pending = 0, cursor = 0;
+  const worker = async () => {
+    while (cursor < jobs.length) {
+      const [lid, d] = jobs[cursor++];
+      try {
+        const g = Date.now() < deadline ? await buildLeagueDay(lid, d, tz) : await peekLeagueDay(lid, d, tz);
+        if (!g) { pending++; continue; }
+        for (const fx of g.fixtures || []) {
+          if (!wanted.has(String(fx.id))) continue;
+          if (!groups.has(lid)) groups.set(lid, { league: { ...g.league, continent: continentFor(g.league.country) }, season: g.season, fixtures: [] });
+          groups.get(lid).fixtures.push({ ...fx, ...decorate(fx) });
+        }
+      } catch (e) {
+        console.error(`[picked] ${lid} ${d}: ${e.message}`);
+        pending++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, jobs.length || 1) }, worker));
+  const leagues = [...groups.values()]
+    .map((g) => ({ ...g, fixtures: g.fixtures.sort((x, y) => x.startTimestamp - y.startTimestamp) }))
+    .sort((x, y) => y.fixtures.length - x.fixtures.length);
+  return { leagues, totalMatches: leagues.reduce((n, g) => n + g.fixtures.length, 0), partial: pending > 0, pending };
+}
+
 router.get("/euro-domestic", async (req, res) => {
   const tz = req.query.tz;
   const today = formatDate(new Date(), tz);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") && req.query.from >= today ? req.query.from : today;
+  const days = Math.min(7, Math.max(1, Number(req.query.days) || 3));
   const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
-  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sun
-  const weekFrom = shiftN(today, -((dow + 6) % 7)); // Monday
-  const weekTo = shiftN(weekFrom, 6);
+  const to = shiftN(from, days - 1);
 
-  const cacheKey = `euro-domestic:${today}:${tz || "server"}`;
+  const cacheKey = `euro-domestic:${from}:${days}:${tz || "server"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.json({ ...cached, fromCache: true });
 
   try {
-    const weekDates = Array.from({ length: 7 }, (_, i) => shiftN(weekFrom, i));
-    const aheadDates = Array.from({ length: DOMESTIC_LOOKAHEAD_DAYS + 1 }, (_, i) => shiftN(today, i));
-    // UTC dates around the local window so tz day-boundaries are covered.
-    const utc = [...new Set([shiftN(weekFrom, -1), ...weekDates, ...aheadDates, shiftN(aheadDates[aheadDates.length - 1], 1)])].sort();
-    const all = (await Promise.all(utc.map((d) => fixturesOnDateCached(d).catch(() => [])))).flat();
+    // The window ± EURO_NEAR_DAYS (+1 UTC day each side for tz day-boundaries).
+    const span = Array.from({ length: days + 2 * EURO_NEAR_DAYS + 2 }, (_, i) => shiftN(from, i - EURO_NEAR_DAYS - 1));
+    const all = (await Promise.all(span.map((d) => fixturesOnDateCached(d).catch(() => [])))).flat();
     const seen = new Set();
     const fixtures = all.filter((f) => f.startTimestamp && !seen.has(f.id) && seen.add(f.id));
     const localDate = (f) => formatDate(new Date(f.startTimestamp * 1000), tz);
+    const dayNum = (ymd) => Date.parse(`${ymd}T00:00:00Z`) / 86400000;
 
-    // 1) This week's European ties → each team's European game.
-    const euroOf = new Map(); // teamId -> { comp, leagueId, opponent, ts, date, home, status, score }
+    // 1) Every club's European games across the span.
+    const euroGames = new Map(); // teamId -> [{ comp, leagueId, opponent, ts, date, home, name }]
     for (const f of fixtures) {
       const comp = UEFA_COMPS[String(f.leagueId)];
       if (!comp) continue;
       const d = localDate(f);
-      if (d < weekFrom || d > weekTo) continue;
-      for (const [id, opp, isHome] of [[f.homeId, f.away, true], [f.awayId, f.home, false]]) {
+      for (const [id, opp, isHome, name] of [[f.homeId, f.away, true, f.home], [f.awayId, f.home, false, f.away]]) {
         if (!id) continue;
-        const prev = euroOf.get(id);
-        if (!prev || f.startTimestamp > prev.ts) euroOf.set(id, { comp, leagueId: String(f.leagueId), opponent: opp, ts: f.startTimestamp, date: d, home: isHome, name: isHome ? f.home : f.away });
+        if (!euroGames.has(id)) euroGames.set(id, []);
+        euroGames.get(id).push({ comp, leagueId: String(f.leagueId), opponent: opp, ts: f.startTimestamp, date: d, home: isHome, name });
       }
     }
 
-    // 2) Each team's next not-started domestic LEAGUE match we cover (no cups / cross-
-    //    league comps), from today through the lookahead window.
+    // 2) Their domestic LEAGUE matches in the window (no cups / cross-league comps)
+    //    that have a European game within EURO_NEAR_DAYS either side.
     const nowSec = Math.floor(Date.now() / 1000);
-    const nextOf = new Map(); // teamId -> fixture
+    const nearOf = (teamId, f) => {
+      const games = euroGames.get(teamId);
+      if (!games) return null;
+      const d = dayNum(localDate(f));
+      const gap = (g) => dayNum(g.date) - d;
+      const prev = games.filter((g) => g.ts < f.startTimestamp && -gap(g) <= EURO_NEAR_DAYS).sort((x, y) => y.ts - x.ts)[0];
+      const next = games.filter((g) => g.ts > f.startTimestamp && gap(g) <= EURO_NEAR_DAYS).sort((x, y) => x.ts - y.ts)[0];
+      const pack = (g) => (g ? { comp: g.comp, leagueId: g.leagueId, opponent: g.opponent, kickoff: g.ts, home: g.home, days: Math.abs(gap(g)) } : null);
+      return prev || next ? { prev: pack(prev), next: pack(next) } : null;
+    };
+    const wanted = new Map();
+    const clubs = new Set(), clubsWithMatch = new Set();
     for (const f of fixtures) {
       const lid = String(f.leagueId);
       const lg = LEAGUES_BY_ID[lid];
       if (!lg || NON_DOMESTIC.has(lid) || CUP_RX.test(lg.name) || lg.friendly) continue;
-      if (f.status !== "notstarted" || f.startTimestamp < nowSec - 600) continue;
       const d = localDate(f);
-      if (d < today || d > aheadDates[aheadDates.length - 1]) continue;
+      if (d < from || d > to) continue;
+      if (f.status === "finished" && f.startTimestamp < nowSec - 3 * 3600) continue;
       for (const id of [f.homeId, f.awayId]) {
-        if (!id || !euroOf.has(id)) continue;
-        const cur = nextOf.get(id);
-        if (!cur || f.startTimestamp < cur.startTimestamp) nextOf.set(id, f);
+        if (id && nearOf(id, f)) { wanted.set(String(f.id), f); clubsWithMatch.add(id); }
       }
     }
-    const missing = [...euroOf.entries()].filter(([id]) => !nextOf.has(id)).map(([, e]) => `${e.name} (${e.comp})`).sort();
+    // Clubs in Europe around this window (their European game within the window ±
+    // EURO_NEAR_DAYS), and the ones whose league the app doesn't cover at all.
+    const coveredLeagueTeams = new Set();
+    for (const f of fixtures) {
+      const lid = String(f.leagueId), lg = LEAGUES_BY_ID[lid];
+      if (lg && !NON_DOMESTIC.has(lid) && !CUP_RX.test(lg.name)) { coveredLeagueTeams.add(f.homeId); coveredLeagueTeams.add(f.awayId); }
+    }
+    const missing = [];
+    for (const [id, games] of euroGames) {
+      if (!games.some((g) => g.date >= shiftN(from, -EURO_NEAR_DAYS) && g.date <= shiftN(to, EURO_NEAR_DAYS))) continue;
+      clubs.add(id);
+      if (!coveredLeagueTeams.has(id)) missing.push(`${games[0].name} (${games[0].comp})`);
+    }
 
     // 3) Build the league-days those matches fall on and keep just those fixtures.
-    const wanted = new Map(); // fixture id -> fixture
-    for (const f of nextOf.values()) wanted.set(String(f.id), f);
-    const jobs = [...new Set([...wanted.values()].map((f) => `${f.leagueId}|${localDate(f)}`))]
-      .map((k) => k.split("|"));
-    const BUILD_BUDGET_MS = Number(process.env.TODAY_BUILD_BUDGET_MS || 45000);
-    const deadline = Date.now() + BUILD_BUDGET_MS;
-    const groups = new Map(); // leagueId -> { league, season, fixtures }
-    let pending = 0, cursor = 0;
-    const worker = async () => {
-      while (cursor < jobs.length) {
-        const [lid, d] = jobs[cursor++];
-        try {
-          const g = Date.now() < deadline ? await buildLeagueDay(lid, d, tz) : await peekLeagueDay(lid, d, tz);
-          if (!g) { pending++; continue; }
-          for (const fx of g.fixtures || []) {
-            if (!wanted.has(String(fx.id))) continue;
-            const tag = (teamId) => {
-              const e = euroOf.get(teamId);
-              if (!e) return null;
-              // Calendar days between the two kick-offs (Wed → Sat = 3), in the viewer's tz.
-              const restDays = Math.round((Date.parse(`${localDate(fx)}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`)) / 86400000);
-              return { comp: e.comp, leagueId: e.leagueId, opponent: e.opponent, kickoff: e.ts, home: e.home, restDays };
-            };
-            if (!groups.has(lid)) groups.set(lid, { league: { ...g.league, continent: continentFor(g.league.country) }, season: g.season, fixtures: [] });
-            groups.get(lid).fixtures.push({ ...fx, euro: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } });
-          }
-        } catch (e) {
-          console.error(`[euro-domestic] ${lid} ${d}: ${e.message}`);
-          pending++;
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, jobs.length || 1) }, worker));
-
-    const leagues = [...groups.values()]
-      .map((g) => ({ ...g, fixtures: g.fixtures.sort((a, b) => a.startTimestamp - b.startTimestamp) }))
-      .sort((a, b) => b.fixtures.length - a.fixtures.length);
-    const totalMatches = leagues.reduce((n, g) => n + g.fixtures.length, 0);
-    const partial = pending > 0;
+    const { leagues, totalMatches, partial, pending } = await buildPickedFixtures(wanted, tz,
+      (fx) => ({ euro: { home: nearOf(fx.homeTeam?.id, fx), away: nearOf(fx.awayTeam?.id, fx) } }));
     const result = {
-      date: today, week: { from: weekFrom, to: weekTo },
-      teams: euroOf.size, withMatch: nextOf.size, missing,
+      date: from, from, to, days, nearDays: EURO_NEAR_DAYS,
+      teams: clubs.size, withMatch: clubsWithMatch.size, missing: [...new Set(missing)].sort(),
       totalMatches, leagues, partial, pending,
     };
     if (!partial) cacheSet(cacheKey, result, TTL.FIXTURES);
     res.json({ ...result, fromCache: false });
   } catch (err) {
     console.error(`[euro-domestic] ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Standout teams -----------------------------------------------------------------
+//
+// Season-long standouts across every domestic league we cover (league games only — no
+// cups, UEFA/CONMEBOL or friendlies). A team qualifies when it clears ALL four bars:
+// scored in 85%+ of games, won 60%+, won 55%+ at home, won 45%+ away (min 8 games,
+// 3 home + 3 away). "Elite" = 90 / 65 / 60 / 55. Ranked by 30% win + 25% scoring +
+// 22.5% home win + 22.5% away win, discounted for small samples (P / (P + 3)).
+// Rebuilt from the cached season events at most every 6h.
+const STANDOUT_BARS = { scored: 85, win: 60, home: 55, away: 45 };
+const ELITE_BARS = { scored: 90, win: 65, home: 60, away: 55 };
+
+async function getStandoutTeams() {
+  const cacheKey = "standouts:list";
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  const leagues = LEAGUES.filter((l) => !NON_DOMESTIC.has(String(l.id)) && !CUP_RX.test(l.name) && !l.friendly && !/friendl/i.test(l.name));
+  const teams = new Map();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < leagues.length) {
+      const l = leagues[cursor++];
+      try {
+        const season = await getCurrentSeason(l.id);
+        if (!season) continue;
+        const events = await getLeaguePastEvents(l.id, season.id);
+        for (const e of events) {
+          if (e.status?.type !== "finished") continue;
+          const hs = e.homeScore?.current, as = e.awayScore?.current;
+          if (hs == null || as == null) continue;
+          for (const [t, gf, ga, home] of [[e.homeTeam, hs, as, true], [e.awayTeam, as, hs, false]]) {
+            if (!t?.id) continue;
+            const key = `${l.id}:${t.id}`;
+            if (!teams.has(key)) teams.set(key, { id: t.id, name: t.name, leagueId: String(l.id), league: l.name, country: l.country, flag: l.flag, tier: l.tier ?? 1, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, scored: 0, hP: 0, hW: 0, aP: 0, aW: 0, last: [] });
+            const r = teams.get(key);
+            const res = gf > ga ? "W" : gf === ga ? "D" : "L";
+            r.P++; r[res]++; r.GF += gf; r.GA += ga; if (gf > 0) r.scored++;
+            if (home) { r.hP++; if (res === "W") r.hW++; } else { r.aP++; if (res === "W") r.aW++; }
+            r.last.push([e.startTimestamp, res]);
+          }
+        }
+      } catch (err) {
+        console.error(`[standouts] ${l.id}: ${err.message}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
+  const clears = (r, bars) => r.scoredPct >= bars.scored && r.win >= bars.win && r.homeWin >= bars.home && r.awayWin >= bars.away;
+  const list = [...teams.values()]
+    .filter((r) => r.P >= 8 && r.hP >= 3 && r.aP >= 3)
+    .map((r) => {
+      const o = {
+        id: r.id, name: r.name, leagueId: r.leagueId, league: r.league, country: r.country, flag: r.flag, tier: r.tier,
+        P: r.P, W: r.W, D: r.D, L: r.L, gf: +(r.GF / r.P).toFixed(2), ga: +(r.GA / r.P).toFixed(2),
+        win: pct(r.W, r.P), scoredPct: pct(r.scored, r.P), homeWin: pct(r.hW, r.hP), awayWin: pct(r.aW, r.aP),
+        form: r.last.sort((x, y) => x[0] - y[0]).slice(-6).map((x) => x[1]).join(""),
+      };
+      // Rank on unrounded rates so ties break on the real numbers.
+      const raw = 0.3 * (r.W / r.P) + 0.25 * (r.scored / r.P) + 0.225 * (r.hW / r.hP) + 0.225 * (r.aW / r.aP);
+      o.score = +(100 * raw * (r.P / (r.P + 3))).toFixed(2);
+      o.elite = clears(o, ELITE_BARS);
+      return o;
+    })
+    .filter((o) => clears(o, STANDOUT_BARS))
+    .sort((x, y) => y.score - x.score)
+    .map((o, i) => ({ ...o, rank: i + 1 }));
+  const out = { builtAt: Date.now(), leagues: leagues.length, teams: list };
+  if (list.length) cacheSet(cacheKey, out, TTL.TEAM_FORM);
+  return out;
+}
+
+// GET /api/standouts?tz=&from=YYYY-MM-DD&days=3 → every standout team's fixtures in
+// that window (any competition we cover), with the standout side(s) tagged.
+router.get("/standouts", async (req, res) => {
+  const tz = req.query.tz;
+  const today = formatDate(new Date(), tz);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") && req.query.from >= today ? req.query.from : today;
+  const days = Math.min(7, Math.max(1, Number(req.query.days) || 3));
+  const shiftN = (ymd, n) => { const [y, mo, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, mo - 1, d)); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().slice(0, 10); };
+  const windowDates = Array.from({ length: days }, (_, i) => shiftN(from, i));
+  const to = windowDates[windowDates.length - 1];
+
+  const cacheKey = `standouts:${from}:${days}:${tz || "server"}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ ...cached, fromCache: true });
+
+  try {
+    const st = await getStandoutTeams();
+    const byTeam = new Map(st.teams.map((t) => [t.id, t]));
+    const utc = [shiftN(from, -1), ...windowDates, shiftN(to, 1)];
+    const all = (await Promise.all(utc.map((d) => fixturesOnDateCached(d).catch(() => [])))).flat();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const wanted = new Map();
+    for (const f of all) {
+      if (!f.startTimestamp || !LEAGUES_BY_ID[String(f.leagueId)]) continue;
+      if (!byTeam.has(f.homeId) && !byTeam.has(f.awayId)) continue;
+      const d = formatDate(new Date(f.startTimestamp * 1000), tz);
+      if (d < from || d > to) continue;
+      // Today: keep what's still to come or in play; drop long-finished games.
+      if (f.status === "finished" && f.startTimestamp < nowSec - 3 * 3600) continue;
+      wanted.set(String(f.id), f);
+    }
+    const tag = (id) => {
+      const t = byTeam.get(id);
+      return t ? { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league } : null;
+    };
+    const { leagues, totalMatches, partial, pending } = await buildPickedFixtures(wanted, tz,
+      (fx) => ({ standout: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } }));
+    const result = {
+      date: from, from, to, days, standouts: st.teams.length, leaguesScanned: st.leagues,
+      bars: { standout: STANDOUT_BARS, elite: ELITE_BARS }, totalMatches, leagues, partial, pending,
+    };
+    if (!partial) cacheSet(cacheKey, result, TTL.FIXTURES);
+    res.json({ ...result, fromCache: false });
+  } catch (err) {
+    console.error(`[standouts] ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
