@@ -1256,6 +1256,9 @@ router.get("/euro-domestic", async (req, res) => {
   if (cached) return res.json({ ...cached, fromCache: true });
 
   try {
+    // Season lines for the cards (standout #rank or plain record), loaded alongside
+    // the fixture discovery — the list is cached 6h, so this is usually instant.
+    const standoutsP = getStandoutTeams().catch(() => null);
     // The window ± EURO_NEAR_DAYS (+1 UTC day each side for tz day-boundaries).
     const span = Array.from({ length: days + 2 * EURO_NEAR_DAYS + 2 }, (_, i) => shiftN(from, i - EURO_NEAR_DAYS - 1));
     const all = (await Promise.all(span.map((d) => fixturesOnDateCached(d).catch(() => [])))).flat();
@@ -1318,8 +1321,17 @@ router.get("/euro-domestic", async (req, res) => {
     }
 
     // 3) Build the league-days those matches fall on and keep just those fixtures.
-    const { leagues, totalMatches, partial, pending } = await buildPickedFixtures(wanted, tz,
-      (fx) => ({ euro: { home: nearOf(fx.homeTeam?.id, fx), away: nearOf(fx.awayTeam?.id, fx) } }));
+    const st = await standoutsP;
+    const season = st ? seasonTagger(st) : () => null;
+    const built = await buildPickedFixtures(wanted, tz, (fx) => ({
+      euro: { home: nearOf(fx.homeTeam?.id, fx), away: nearOf(fx.awayTeam?.id, fx) },
+      standout: { home: season(fx.homeTeam?.id), away: season(fx.awayTeam?.id) },
+    }));
+    const { leagues, totalMatches } = built;
+    // An incomplete season scan (some leagues failed to load) would leave cards without
+    // their season line, so treat it like a pending league: partial, client re-polls.
+    const pending = built.pending + (st ? st.failed : 1);
+    const partial = pending > 0;
     const result = {
       date: from, from, to, days, nearDays: EURO_NEAR_DAYS,
       teams: clubs.size, withMatch: clubsWithMatch.size, missing: [...new Set(missing)].sort(),
@@ -1350,36 +1362,51 @@ async function getStandoutTeams() {
   if (hit) return hit;
   const leagues = LEAGUES.filter((l) => !NON_DOMESTIC.has(String(l.id)) && !CUP_RX.test(l.name) && !l.friendly && !/friendl/i.test(l.name));
   const teams = new Map();
-  let cursor = 0, failed = 0;
+  // Scan one league's finished games into `teams`. Throws on an upstream error so the
+  // caller can retry it (a cold scan can trip the 450/min rate limit).
+  const scanLeague = async (l) => {
+    const season = await getCurrentSeason(l.id);
+    if (!season) return;
+    const events = await getLeaguePastEvents(l.id, season.id);
+    for (const e of events) {
+      if (e.status?.type !== "finished") continue;
+      const hs = e.homeScore?.current, as = e.awayScore?.current;
+      if (hs == null || as == null) continue;
+      for (const [t, gf, ga, home] of [[e.homeTeam, hs, as, true], [e.awayTeam, as, hs, false]]) {
+        if (!t?.id) continue;
+        const key = `${l.id}:${t.id}`;
+        if (!teams.has(key)) teams.set(key, { id: t.id, name: t.name, leagueId: String(l.id), league: l.name, country: l.country, flag: l.flag, tier: l.tier ?? 1, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, scored: 0, hP: 0, hW: 0, aP: 0, aW: 0, last: [] });
+        const r = teams.get(key);
+        const res = gf > ga ? "W" : gf === ga ? "D" : "L";
+        r.P++; r[res]++; r.GF += gf; r.GA += ga; if (gf > 0) r.scored++;
+        if (home) { r.hP++; if (res === "W") r.hW++; } else { r.aP++; if (res === "W") r.aW++; }
+        r.last.push([e.startTimestamp, res]);
+      }
+    }
+  };
+  let cursor = 0;
+  const failedLeagues = [];
   const worker = async () => {
     while (cursor < leagues.length) {
       const l = leagues[cursor++];
-      try {
-        const season = await getCurrentSeason(l.id);
-        if (!season) continue;
-        const events = await getLeaguePastEvents(l.id, season.id);
-        for (const e of events) {
-          if (e.status?.type !== "finished") continue;
-          const hs = e.homeScore?.current, as = e.awayScore?.current;
-          if (hs == null || as == null) continue;
-          for (const [t, gf, ga, home] of [[e.homeTeam, hs, as, true], [e.awayTeam, as, hs, false]]) {
-            if (!t?.id) continue;
-            const key = `${l.id}:${t.id}`;
-            if (!teams.has(key)) teams.set(key, { id: t.id, name: t.name, leagueId: String(l.id), league: l.name, country: l.country, flag: l.flag, tier: l.tier ?? 1, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, scored: 0, hP: 0, hW: 0, aP: 0, aW: 0, last: [] });
-            const r = teams.get(key);
-            const res = gf > ga ? "W" : gf === ga ? "D" : "L";
-            r.P++; r[res]++; r.GF += gf; r.GA += ga; if (gf > 0) r.scored++;
-            if (home) { r.hP++; if (res === "W") r.hW++; } else { r.aP++; if (res === "W") r.aW++; }
-            r.last.push([e.startTimestamp, res]);
-          }
-        }
-      } catch (err) {
+      try { await scanLeague(l); } catch (err) {
         console.error(`[standouts] ${l.id}: ${err.message}`);
-        failed++;
+        failedLeagues.push(l);
       }
     }
   };
   await Promise.all(Array.from({ length: 4 }, worker));
+  // One retry for rate-limited leagues, after the per-minute window has had a moment.
+  let failed = 0;
+  if (failedLeagues.length) {
+    await new Promise((r) => setTimeout(r, 4000));
+    for (const l of failedLeagues) {
+      try { await scanLeague(l); } catch (err) {
+        console.error(`[standouts] retry ${l.id}: ${err.message}`);
+        failed++;
+      }
+    }
+  }
 
   const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
   const clears = (r, bars) => r.scoredPct >= bars.scored && r.win >= bars.win && r.homeWin >= bars.home && r.awayWin >= bars.away;
@@ -1422,6 +1449,18 @@ async function getStandoutTeams() {
   return out;
 }
 
+// A team's season line for a fixture card: standouts carry their #rank (and ★ elite),
+// any other team gets the same numbers without one. null when we have no league stats.
+function seasonTagger(st) {
+  const byTeam = new Map(st.teams.map((t) => [t.id, t]));
+  return (id) => {
+    const t = byTeam.get(id);
+    if (t) return { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league };
+    const o = st.allStats?.[id];
+    return o ? { rank: null, elite: false, ...o } : null;
+  };
+}
+
 // GET /api/standouts?tz=&from=YYYY-MM-DD&days=3 → every standout team's fixtures in
 // that window (any competition we cover), with the standout side(s) tagged.
 router.get("/standouts", async (req, res) => {
@@ -1453,13 +1492,7 @@ router.get("/standouts", async (req, res) => {
       if (f.status === "finished" && f.startTimestamp < nowSec - 3 * 3600) continue;
       wanted.set(String(f.id), f);
     }
-    // Standouts carry their rank; the other side gets the same season line without one.
-    const tag = (id) => {
-      const t = byTeam.get(id);
-      if (t) return { rank: t.rank, elite: t.elite, P: t.P, W: t.W, D: t.D, L: t.L, win: t.win, scoredPct: t.scoredPct, homeWin: t.homeWin, awayWin: t.awayWin, form: t.form, league: t.league };
-      const o = st.allStats?.[id];
-      return o ? { rank: null, elite: false, ...o } : null;
-    };
+    const tag = seasonTagger(st);
     const built = await buildPickedFixtures(wanted, tz,
       (fx) => ({ standout: { home: tag(fx.homeTeam?.id), away: tag(fx.awayTeam?.id) } }));
     const { leagues, totalMatches } = built;

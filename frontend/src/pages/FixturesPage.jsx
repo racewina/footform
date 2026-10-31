@@ -872,20 +872,6 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
           <span style={styles.cardLeagueName}>{league.name}</span>
         </div>
       )}
-      {(fixture.standout?.home || fixture.standout?.away) && (
-        <div style={styles.euroTags}>
-          {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
-            // Both sides get their season line; only standouts carry the #rank badge.
-            const t = fixture.standout?.[side];
-            if (!t) return null;
-            return (
-              <span key={side} style={{ ...styles.euroTag, ...(t.rank ? {} : styles.tagMuted) }} title={`${team?.name}${t.rank ? ` (standout #${t.rank})` : ""}: ${t.league} ${t.W}-${t.D}-${t.L}, scored in ${t.scoredPct}% of games, won ${t.homeWin}% at home and ${t.awayWin}% away. Last 6: ${t.form}`}>
-                {t.rank ? <b style={styles.euroTagComp}>{t.elite ? "★" : ""}#{t.rank}</b> : null} {team?.shortName || team?.name}: {t.W}-{t.D}-{t.L} · scored {t.scoredPct}% · H {t.homeWin}% · A {t.awayWin}%
-              </span>
-            );
-          })}
-        </div>
-      )}
       {(fixture.euro?.home || fixture.euro?.away) && (
         <div style={styles.euroTags}>
           {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
@@ -905,6 +891,20 @@ function FixtureCard({ fixture, league, season, highlight, showLeague, live, foc
             return (
               <span key={side} style={styles.euroTag} title={title}>
                 <b style={styles.euroTagComp}>{comp}</b> {team?.shortName || team?.name}: {parts.join(" · ")}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {(fixture.standout?.home || fixture.standout?.away) && (
+        <div style={styles.euroTags}>
+          {[["home", fixture.homeTeam], ["away", fixture.awayTeam]].map(([side, team]) => {
+            // Both sides get their season line; only standouts carry the #rank badge.
+            const t = fixture.standout?.[side];
+            if (!t) return null;
+            return (
+              <span key={side} style={{ ...styles.euroTag, ...(t.rank ? {} : styles.tagMuted) }} title={`${team?.name}${t.rank ? ` (standout #${t.rank})` : ""}: ${t.league} ${t.W}-${t.D}-${t.L}, scored in ${t.scoredPct}% of games, won ${t.homeWin}% at home and ${t.awayWin}% away. Last 6: ${t.form}`}>
+                {t.rank ? <b style={styles.euroTagComp}>{t.elite ? "★" : ""}#{t.rank}</b> : null} {team?.shortName || team?.name}: {t.W}-{t.D}-{t.L} · scored {t.scoredPct}% · H {t.homeWin}% · A {t.awayWin}%
               </span>
             );
           })}
