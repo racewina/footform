@@ -6,6 +6,7 @@ import analyzeRouter from "./routes/analyze.js";
 import predictRouter from "./routes/predict.js";
 import seoRouter from "./routes/seo.js";
 import telegramRouter from "./routes/telegram.js";
+import agentReportRouter from "./routes/agentReport.js";
 import { cacheStats } from "./services/cache.js";
 import { snapshotEnabled, loadSnapshot, saveSnapshot } from "./services/snapshot.js";
 
@@ -121,6 +122,7 @@ app.use("/api", analyzeRouter);
 app.use("/api", predictRouter);
 app.use("/api", fixturesRouter);
 app.use("/api", telegramRouter);
+app.use("/api", agentReportRouter);
 
 // Server-rendered, crawlable SEO pages (/leagues, /league/:slug). Mounted outside
 // /api so it isn't rate-limited or wrapped by the API cache middleware; it sets

@@ -4,9 +4,11 @@
   "outputDirectory": "frontend/dist",
   "framework": null,
   "functions": {
-    "api/index.js": { "maxDuration": 300 }
+    "api/index.js": { "maxDuration": 300 },
+    "api/agent.js": { "maxDuration": 800 }
   },
   "rewrites": [
+    { "source": "/api/cron/agent-report", "destination": "/api/agent" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/leagues", "destination": "/api" },
     { "source": "/league/(.*)", "destination": "/api" },
@@ -17,7 +19,8 @@
   ],
   "crons": [
     { "path": "/api/cron/warm", "schedule": "0 */2 * * *" },
-    { "path": "/api/cron/telegram-push", "schedule": "15 * * * *" }
+    { "path": "/api/cron/telegram-push", "schedule": "15 * * * *" },
+    { "path": "/api/cron/agent-report", "schedule": "15,35 * * * *" }
   ],
   "headers": [
     {

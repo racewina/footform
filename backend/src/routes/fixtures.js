@@ -3644,3 +3644,7 @@ router.get("/ask", async (req, res) => {
 });
 
 export default router;
+
+// Building blocks for the research agent (routes/agentReport.js), which screens a
+// time window of fixtures on the same league-day builds, odds and team history.
+export { buildLeagueDay, getFixtureOdds, getTeamEvents, getFixtureInjuryRows, fixturesOnDateCached, formatDate };

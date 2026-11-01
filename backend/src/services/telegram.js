@@ -98,6 +98,7 @@ export async function ensureWebhook() {
       { command: "help", description: "How to ask + examples" },
       { command: "daily", description: "Show / add / remove saved daily queries" },
       { command: "now", description: "Send the daily list right now" },
+      { command: "agent", description: "Research agent: status, or /agent now for a report" },
     ],
   });
   return { ok: Boolean(set), url };

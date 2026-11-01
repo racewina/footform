@@ -26,6 +26,8 @@ import {
   ensureWebhook, readDailyPin, writeDaily,
 } from "../services/telegram.js";
 import { isMenuIntent, showMenu, helpText, handleText, addDaily, runDaily, handleCallback } from "./telegramMenu.js";
+import { recentRuns, agentTz } from "./agentReport.js";
+import { agentEnabled } from "../services/researchAgent.js";
 
 const router = express.Router();
 const WORK_BUDGET_MS = 240 * 1000; // leave headroom under the 300s maxDuration
@@ -68,6 +70,36 @@ async function handleDaily(chatId, arg) {
   return sendText(chatId, `🗑 Removed #${idx + 1}.\n${list(next)}`, { reply_markup: MENU_BTN });
 }
 
+// /agent → the research agent's schedule + recent runs; /agent now [hours] → an
+// on-demand report. The run itself goes through the agent's own cron endpoint (its
+// 800s function), called here with CRON_SECRET; the report arrives as messages.
+async function handleAgent(chatId, arg) {
+  const tz = agentTz();
+  const m = arg.trim().match(/^now(?:\s+(\d{1,2}))?$/i);
+  if (m) {
+    if (!agentEnabled()) return sendText(chatId, "The research agent needs ANTHROPIC_API_KEY set in Vercel.");
+    const host = (process.env.TELEGRAM_WEBHOOK_HOST || process.env.VERCEL_PROJECT_PRODUCTION_URL || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    if (!host || !process.env.CRON_SECRET) return sendText(chatId, "Can't start a run: missing host or CRON_SECRET.");
+    const hours = Number(m[1]) || 0;
+    await sendText(chatId, `🧠 Starting a research report for ${hours ? `the next ${hours}h` : "the rest of today"} — it takes a few minutes and arrives here.`);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), WORK_BUDGET_MS);
+    try {
+      await fetch(`https://${host}/api/cron/agent-report?manual=1${hours ? `&hours=${hours}` : ""}`, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` }, signal: ctrl.signal });
+    } catch { /* the run continues in its own function; its result is the report */ } finally { clearTimeout(t); }
+    return null;
+  }
+  const runs = await recentRuns();
+  const fmt = (ms) => new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(ms));
+  const lines = runs.slice(0, 8).map((r) => `${r.state === "sent" ? "✅" : "❌"} ${esc(r.label)} · ${esc(fmt(r.at))}${r.state === "sent" ? ` · ${r.picks} pick${r.picks === 1 ? "" : "s"}${r.acca ? ` · acca @${r.acca}` : ""}` : ` · ${esc(r.error || "failed")}`}`);
+  return sendText(chatId, [
+    `🧠 <b>Research agent</b> ${agentEnabled() ? "· on" : "· OFF (no ANTHROPIC_API_KEY)"}`,
+    `Schedule (${esc(tz)}): every day 00:35 (full day); Sat + Sun every 3h from 02:15 (next 3h of kickoffs).`,
+    lines.length ? `\n<b>Recent runs</b>\n${lines.join("\n")}` : "\nNo runs recorded yet.",
+    "\nSend <code>/agent now</code> for a report on the rest of today, or <code>/agent now 3</code> for the next 3 hours.",
+  ].join("\n"));
+}
+
 const isAllowed = (chatId) => allowedChatIds().has(String(chatId));
 
 async function handleMessage(msg) {
@@ -89,6 +121,7 @@ async function handleMessage(msg) {
   if (cmd === "help") return sendText(chatId, helpText(), { reply_markup: MENU_BTN });
   if (cmd === "daily") return handleDaily(chatId, arg);
   if (cmd === "now") return runDaily(chatId, { deadline, manual: true });
+  if (cmd === "agent") return handleAgent(chatId, arg);
   if (cmd === "start" || cmd === "menu" || isMenuIntent(text)) return showMenu(chatId);
   if (cmd) return sendText(chatId, "Unknown command.", { reply_markup: MENU_BTN });
 

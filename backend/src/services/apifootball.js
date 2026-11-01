@@ -455,9 +455,14 @@ export async function fetchFixtureOdds(fixtureId) {
 
   // best[selectionKey] = { odd, book } with the highest odd seen so far.
   const best = {};
+  // byBook[bookName][selectionKey] = odd — each book's own price, so callers can
+  // quote one named bookmaker (the research agent prefers Betano) instead of the
+  // best-of-market.
+  const byBook = {};
   const consider = (key, oddStr, bookName) => {
     const odd = parseFloat(oddStr);
     if (!(odd > 1)) return;
+    (byBook[bookName] ||= {})[key] = odd;
     if (!best[key] || odd > best[key].odd) best[key] = { odd, book: bookName };
   };
 
@@ -535,7 +540,34 @@ export async function fetchFixtureOdds(fixtureId) {
   }
 
   if (!Object.keys(best).length && !Object.keys(corners).length) return null;
-  return { bookmakers: books.length, best, corners };
+  return { bookmakers: books.length, best, corners, byBook };
+}
+
+// The last `n` meetings between two teams (any venue, any competition), newest
+// first. For the research agent's head-to-head line — the model doesn't use H2H.
+export async function fetchHeadToHeadLast(homeId, awayId, n = 5) {
+  const json = await request(`/fixtures/headtohead?h2h=${homeId}-${awayId}&last=${n}`);
+  const rows = Array.isArray(json?.response) ? json.response : [];
+  return rows.map((fx) => ({
+    date: fx.fixture?.date?.slice(0, 10) || null,
+    league: fx.league?.name || null,
+    home: fx.teams?.home?.name || null,
+    away: fx.teams?.away?.name || null,
+    score: fx.goals?.home != null && fx.goals?.away != null ? `${fx.goals.home}-${fx.goals.away}` : null,
+  }));
+}
+
+// Live status for up to 20 fixtures in ONE call (/fixtures?ids=a-b-c), never
+// cached — the agent's last check that a pick hasn't kicked off before sending.
+export async function fetchFixtureStatuses(ids) {
+  const out = {};
+  for (let i = 0; i < ids.length; i += 20) {
+    const json = await request(`/fixtures?ids=${ids.slice(i, i + 20).join("-")}`);
+    for (const fx of Array.isArray(json?.response) ? json.response : []) {
+      out[fx.fixture?.id] = { status: mapStatus(fx.fixture?.status?.short), short: fx.fixture?.status?.short || null, kickoff: fx.fixture?.timestamp ?? null };
+    }
+  }
+  return out;
 }
 
 // Players unavailable for a fixture (injured / suspended). API-Football populates
