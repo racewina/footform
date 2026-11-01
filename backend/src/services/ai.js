@@ -12,10 +12,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 export const aiEnabled = () => Boolean(process.env.ANTHROPIC_API_KEY);
+// The key as pasted into Vercel, minus stray whitespace/newlines or wrapping quotes
+// (a copy-paste slip that makes Anthropic answer "invalid x-api-key").
+export const anthropicKey = () => String(process.env.ANTHROPIC_API_KEY || "").trim().replace(/^["']+|["']+$/g, "").trim();
 const model = () => process.env.TELEGRAM_AI_MODEL || "claude-opus-5-5";
 
 let client = null;
-const ai = () => (client ||= new Anthropic({ timeout: 60 * 1000, maxRetries: 1 })); // key: ANTHROPIC_API_KEY
+const ai = () => (client ||= new Anthropic({ apiKey: anthropicKey(), timeout: 60 * 1000, maxRetries: 1 }));
 
 // Per-model request features. Server-side refusal fallback ("default" routing) and
 // the effort knob aren't accepted by every model, so only send them where they are.

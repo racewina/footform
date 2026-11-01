@@ -8,6 +8,7 @@
 // The answer comes back through a strict `submit_report` tool call.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { anthropicKey } from "./ai.js";
 
 export const agentEnabled = () => Boolean(process.env.ANTHROPIC_API_KEY);
 const model = () => process.env.AGENT_MODEL || "claude-opus-5-5";
@@ -85,7 +86,7 @@ const SUBMIT_TOOL = {
 // context: { window, coverage, dossiers } (plain JSON). timeoutMs bounds the whole
 // research loop. Returns { report, usage, searches }.
 export async function runResearch(context, { timeoutMs }) {
-  const client = new Anthropic({ timeout: timeoutMs, maxRetries: 1 }); // key: ANTHROPIC_API_KEY
+  const client = new Anthropic({ apiKey: anthropicKey(), timeout: timeoutMs, maxRetries: 1 });
   const started = Date.now();
   const tools = [
     { type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES },
