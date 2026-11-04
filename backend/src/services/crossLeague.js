@@ -20,11 +20,14 @@ const TOP5 = new Set(["England", "Spain", "Italy", "Germany", "France"]);
 const BRA_ARG = new Set(["Brazil", "Argentina"]);
 const UEFA = { edge: 0.471, strong: TOP5 };
 const CONMEBOL = { edge: 0.444, strong: BRA_ARG };
-export const CROSS_LEAGUE = { "2": UEFA, "3": UEFA, "848": UEFA, "13": CONMEBOL, "11": CONMEBOL };
+// AFC club cups (Champions League Elite / Two): no fitted goal edge yet (no study), so
+// no tilt — but the same 90% lean on the bookmaker market for the league-strength gap.
+const AFC = { edge: 0, strong: new Set() };
+export const CROSS_LEAGUE = { "2": UEFA, "3": UEFA, "848": UEFA, "13": CONMEBOL, "11": CONMEBOL, "17": AFC, "18": AFC };
 export const CROSS_MARKET_WEIGHT = 0.9;
 
 // Competitions that mix leagues (and friendlies/internationals) — never a team's home league.
-const NOT_DOMESTIC = new Set(["2", "3", "848", "13", "11", "772", "1", "10", "667", "4", "5", "531", "15"]);
+const NOT_DOMESTIC = new Set(["2", "3", "848", "13", "11", "17", "18", "772", "1", "10", "667", "4", "5", "531", "15"]);
 
 export const isCrossLeague = (leagueId) => Boolean(CROSS_LEAGUE[String(leagueId)]);
 

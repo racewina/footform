@@ -1,4 +1,4 @@
-import { UEFA_IDS, CONMEBOL_IDS, EUROPE_TOP5_IDS } from "../data/botLeagues.js";
+import { UEFA_IDS, CONMEBOL_IDS, AFC_IDS, EUROPE_TOP5_IDS } from "../data/botLeagues.js";
 
 // Rule-based natural-language parser for the prediction chatbot. Turns a free-
 // text query ("list teams in the europe top to score O2.5 and BTTS above 60%")
@@ -110,6 +110,7 @@ function resolveFilterTerm(term, leagues) {
   if (CONTINENT_WORDS[n]) return { kind: "continent", value: CONTINENT_WORDS[n], label: CONTINENT_WORDS[n] };
   if (/^(?:uefa|uefa (?:competitions|cups)|european (?:cups|competitions))$/.test(n)) return { kind: "league", ids: [...UEFA_IDS], label: "UEFA competitions" };
   if (/^(?:conmebol (?:cups|competitions)|south american cups|libertadores and sudamericana)$/.test(n)) return { kind: "league", ids: [...CONMEBOL_IDS], label: "CONMEBOL cups" };
+  if (/^(?:afc|afc (?:cups|competitions)|asian (?:cups|competitions)|afc champions leagues?)$/.test(n)) return { kind: "league", ids: [...AFC_IDS], label: "AFC competitions" };
   if (CHAT_SCOPES.find((x) => x.key === "europe-top5").aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...EUROPE_TOP5_IDS], label: "Europe top 5" };
   if (CHAT_SCOPES.find((x) => x.key === "top-europe").aliases.some((a) => normText(a) === n)) return { kind: "league", ids: [...TOP_EUROPE_IDS], label: "Top Europe" };
 

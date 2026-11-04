@@ -34,7 +34,7 @@ const hoursLabel = () => pushHours().map((h) => `${String(h).padStart(2, "0")}:0
 
 const menuText = () => [
   "⚽ <b>FootForm</b> — here's what I can do:",
-  "<i>Covers ⭐ Europe top 5 (UEFA + top 5 leagues & their 2nd tiers), 🇪🇺 the rest of Europe and 🌎 South America's top flights.</i>",
+  "<i>Covers ⭐ Europe top 5 (UEFA + top 5 leagues & their 2nd tiers), 🇪🇺 the rest of Europe, 🌎 South America's top flights and 🌏 the AFC Champions League Elite/Two.</i>",
   "",
   "🔎 <b>Find picks</b> — market › day › region › pick a match or all of them",
   "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",
@@ -144,8 +144,8 @@ const MARKETS = [
   ["t2", "Team 2+ goals", "team to score 2+"], ["t1", "Team to score", "team to score"],
 ];
 // ---- Featured leagues: day › region › match list ------------------------------------
-// The bot only covers ⭐ Europe top 5, 🇪🇺 Europe (other countries) and 🌎 South
-// America's top flights. Every flow picks the DAY first, then a region (with the day's
+// The bot only covers ⭐ Europe top 5, 🇪🇺 Europe (other countries), 🌎 South
+// America's top flights and 🌏 the AFC club competitions. Every flow picks the DAY first, then a region (with the day's
 // match counts), then lists that day's matches: ✅ All of them, one match, or 🏳️ narrow
 // by country first. A region turns into a parser scope phrase and a country into an
 // "only <country>" clause, so taps, typed queries and saved dailies run the same text;

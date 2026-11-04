@@ -1,12 +1,14 @@
-// Leagues the Telegram bot features, in three categories (user spec 2026-10-19):
+// Leagues the Telegram bot features, in four categories (user spec 2026-10-19; AFC added 2026-11-03):
 //
 //   ⭐ Europe top 5 — UEFA club competitions + the top 5 leagues and their second
 //                     tiers (no domestic cups, no 3rd tier or below).
 //   🇪🇺 Europe       — every league in the app from any OTHER European country.
 //   🌎 South America — CONMEBOL Libertadores/Sudamericana + each country's top flight
 //                     (no domestic cups, no lower tiers).
+//   🌏 Asia (AFC)     — AFC Champions League Elite + AFC Champions League Two only
+//                     (no Asian domestic leagues).
 //
-// Everything else (MLS, Saudi, Asia, Africa, top-5 cups and lower tiers…) is left out
+// Everything else (MLS, Saudi, Asian leagues, Africa, top-5 cups and lower tiers…) is left out
 // of the bot; the web app still covers all leagues. Every bot search, acca, props
 // lookup and daily push is limited to BOT_FEATURED.
 
@@ -15,6 +17,7 @@ import { LEAGUES, continentFor } from "./leagues.js";
 export const TOP5_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France"];
 export const UEFA_IDS = ["2", "3", "848"]; // Champions, Europa, Conference League
 export const CONMEBOL_IDS = ["13", "11"]; // Libertadores, Sudamericana
+export const AFC_IDS = ["17", "18"]; // AFC Champions League Elite, AFC Champions League Two
 // Top-5 top flight + second tier: PL/Championship, La Liga/La Liga 2, Serie A/B,
 // Bundesliga/2. Bundesliga, Ligue 1/Ligue 2.
 const TOP5_LEAGUE_IDS = ["39", "40", "140", "141", "135", "136", "78", "79", "61", "62"];
@@ -33,31 +36,38 @@ export const SA_TOP_IDS = existing([
     .map((l) => String(l.id)),
 ]);
 
-export const BOT_FEATURED = new Set([...EUROPE_TOP5_IDS, ...EUROPE_OTHER_IDS, ...SA_TOP_IDS]);
+export const ASIA_AFC_IDS = existing(AFC_IDS);
+
+export const BOT_FEATURED = new Set([...EUROPE_TOP5_IDS, ...EUROPE_OTHER_IDS, ...SA_TOP_IDS, ...ASIA_AFC_IDS]);
 
 // code → the parser scope it maps to, its label and its league ids.
 export const BOT_REGIONS = [
   { code: "e5", scope: "europe-top5", phrase: "europe top 5", label: "⭐ Europe top 5", ids: EUROPE_TOP5_IDS },
   { code: "eu", scope: "europe-other", phrase: "rest of europe", label: "🇪🇺 Europe", ids: EUROPE_OTHER_IDS },
   { code: "sa", scope: "south-america", phrase: "south america", label: "🌎 South America", ids: SA_TOP_IDS },
+  { code: "as", scope: "asia", phrase: "asia", label: "🌏 Asia (AFC)", ids: ASIA_AFC_IDS },
 ];
 
 // The "countries" of a region, in a stable order (so buttons can carry an index):
-// the club competition group first (UEFA / CONMEBOL), then countries A–Z.
+// the club competition group first (UEFA / CONMEBOL / AFC), then countries A–Z.
 // Each entry: { name, flag, ids, phrase } — phrase is the parser filter that selects it.
 export function regionCountries(code) {
   const region = BOT_REGIONS.find((r) => r.code === code);
   if (!region) return [];
   const leagues = region.ids.map((id) => LEAGUES.find((l) => String(l.id) === id)).filter(Boolean);
   const groups = [];
-  const comps = leagues.filter((l) => l.country === "Europe" || l.country === "South America");
-  if (comps.length) {
-    const uefa = code === "e5";
-    groups.push({ name: uefa ? "UEFA competitions" : "CONMEBOL cups", flag: uefa ? "🇪🇺" : "🌎", ids: comps.map((l) => String(l.id)), phrase: uefa ? "only uefa" : "only conmebol cups" });
+  const COMP_GROUPS = {
+    Europe: { name: "UEFA competitions", flag: "🇪🇺", phrase: "only uefa" },
+    "South America": { name: "CONMEBOL cups", flag: "🌎", phrase: "only conmebol cups" },
+    Asia: { name: "AFC competitions", flag: "🌏", phrase: "only afc" },
+  };
+  for (const [country, g] of Object.entries(COMP_GROUPS)) {
+    const comps = leagues.filter((l) => l.country === country);
+    if (comps.length) groups.push({ ...g, ids: comps.map((l) => String(l.id)) });
   }
   const byCountry = new Map();
   for (const l of leagues) {
-    if (l.country === "Europe" || l.country === "South America") continue;
+    if (COMP_GROUPS[l.country]) continue;
     if (!byCountry.has(l.country)) byCountry.set(l.country, { name: l.country, flag: l.flag, ids: [] });
     byCountry.get(l.country).ids.push(String(l.id));
   }

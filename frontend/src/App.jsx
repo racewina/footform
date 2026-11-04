@@ -333,6 +333,8 @@ const LEAGUE_NAMES = {
   "848": { name: "Conference League", flag: "🇪🇺" },
   "13": { name: "CONMEBOL Libertadores", flag: "🌎" },
   "11": { name: "CONMEBOL Sudamericana", flag: "🌎" },
+  "17": { name: "AFC Champions League Elite", flag: "🌏" },
+  "18": { name: "AFC Champions League Two", flag: "🌏" },
   "73": { name: "Copa do Brasil", flag: "🇧🇷" },
   "130": { name: "Copa Argentina", flag: "🇦🇷" },
   "267": { name: "Copa Chile", flag: "🇨🇱" },

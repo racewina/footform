@@ -1195,7 +1195,7 @@ router.get("/today", async (req, res) => {
 // cached 10 min each); predictions come from the regular per-league day builds, built
 // progressively under a time budget like /today (partial → the client polls).
 const UEFA_COMPS = { "2": "UCL", "3": "UEL", "848": "UECL" };
-const NON_DOMESTIC = new Set(["2", "3", "848", "13", "11", "772", "1", "10", "667", "4", "5", "531", "15"]);
+const NON_DOMESTIC = new Set(["2", "3", "848", "13", "11", "17", "18", "772", "1", "10", "667", "4", "5", "531", "15"]);
 const EURO_NEAR_DAYS = 7;
 
 async function fixturesOnDateCached(date) {
@@ -3324,7 +3324,7 @@ function askScope(params, tz, { betSafe = false, allow = null } = {}) {
     const out = [];
     if (params.scope === "league" && params.leagueId && !allow.has(String(params.leagueId))) out.push(`${params.leagueName || "That league"} isn't featured in the bot.`);
     for (const t of inc) if (t.kind === "league" && !t.ids.some((id) => allow.has(String(id)))) out.push(`${t.label} isn't featured in the bot.`);
-    if (out.length) out.push("The bot covers Europe top 5 (UEFA comps + top 5 leagues and their second tiers), the rest of Europe, and South America's top flights.");
+    if (out.length) out.push("The bot covers Europe top 5 (UEFA comps + top 5 leagues and their second tiers), the rest of Europe, South America's top flights, and the AFC Champions League Elite/Two.");
     return out;
   };
 

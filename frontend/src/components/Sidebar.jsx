@@ -71,7 +71,7 @@ export default function Sidebar({ selectedId, onSelect, date, onDateChange, mobi
   // it — England carries the Championship, League One and League Two rather than
   // scattering them further down. That plus the exclusion below is what
   // decongests the list: seven fewer entries in the A-Z, nothing listed twice.
-  const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America"];
+  const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America", "Asia"];
 
   const byCountry = leagues.reduce((acc, l) => {
     (acc[l.country] ||= []).push(l);

@@ -118,6 +118,8 @@ export const LEAGUES = [
   { id: "848", name: "Conference League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "13", name: "CONMEBOL Libertadores", country: "South America", tier: 1, flag: "🌎" },
   { id: "11", name: "CONMEBOL Sudamericana", country: "South America", tier: 1, flag: "🌎" },
+  { id: "17", name: "AFC Champions League Elite", country: "Asia", tier: 1, flag: "🌏" },
+  { id: "18", name: "AFC Champions League Two", country: "Asia", tier: 1, flag: "🌏" },
   { id: "73", name: "Copa do Brasil", country: "Brazil", tier: 1, flag: "🇧🇷" },
   { id: "130", name: "Copa Argentina", country: "Argentina", tier: 1, flag: "🇦🇷" },
   { id: "267", name: "Copa Chile", country: "Chile", tier: 1, flag: "🇨🇱" },
@@ -165,7 +167,7 @@ export const COUNTRY_CONTINENT = {
   "South America": "South America",
   "North America": "North America", "Central America": "North America",
   USA: "North America", Canada: "North America", Mexico: "North America", "Costa Rica": "North America",
-  China: "Asia", "South Korea": "Asia", Japan: "Asia", "Saudi Arabia": "Asia",
+  China: "Asia", "South Korea": "Asia", Japan: "Asia", "Saudi Arabia": "Asia", Asia: "Asia",
   "South Africa": "Africa", Egypt: "Africa",
   International: "International",
 };

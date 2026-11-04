@@ -16,7 +16,7 @@ const WINDOWS = [
 ];
 
 // Same pinned order as the Today's Matches sidebar.
-const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America"];
+const TOP_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France", "Europe", "South America", "Asia"];
 // Continent chips (shown only when present in the day's leagues).
 const CONTINENT_ORDER = ["Europe", "South America", "North America", "Asia", "Africa", "International", "Other"];
 // Label a kickoff-hour bucket, e.g. 6 → "6–7 AM".
