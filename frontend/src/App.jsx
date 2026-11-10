@@ -331,6 +331,7 @@ const LEAGUE_NAMES = {
   "2":  { name: "Champions League", flag: "🇪🇺" },
   "3": { name: "Europa League", flag: "🇪🇺" },
   "848": { name: "Conference League", flag: "🇪🇺" },
+  "5": { name: "UEFA Nations League", flag: "🇪🇺" },
   "13": { name: "CONMEBOL Libertadores", flag: "🌎" },
   "11": { name: "CONMEBOL Sudamericana", flag: "🌎" },
   "17": { name: "AFC Champions League Elite", flag: "🌏" },

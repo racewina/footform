@@ -20,10 +20,14 @@ const TOP5 = new Set(["England", "Spain", "Italy", "Germany", "France"]);
 const BRA_ARG = new Set(["Brazil", "Argentina"]);
 const UEFA = { edge: 0.471, strong: TOP5 };
 const CONMEBOL = { edge: 0.444, strong: BRA_ARG };
-// AFC club cups (Champions League Elite / Two): no fitted goal edge yet (no study), so
-// no tilt — but the same 90% lean on the bookmaker market for the league-strength gap.
-const AFC = { edge: 0, strong: new Set() };
-export const CROSS_LEAGUE = { "2": UEFA, "3": UEFA, "848": UEFA, "13": CONMEBOL, "11": CONMEBOL, "17": AFC, "18": AFC };
+// No fitted goal edge (no tilt), only the 90% lean on the bookmaker market:
+//   AFC club cups (Champions League Elite / Two) — league-strength gap, no study yet.
+//   UEFA Nations League (5) — national teams' form mixes qualifiers/tournaments against
+//     very different opposition; on the 104 finished 2026 league-phase games the model
+//     scored 1X2 log loss 1.061 / 41% vs 1.089 for flat base rates (barely any skill),
+//     and it is far flatter than the market on mismatches (Czechia–Spain 58% v 81%).
+const MARKET_ONLY = { edge: 0, strong: new Set() };
+export const CROSS_LEAGUE = { "2": UEFA, "3": UEFA, "848": UEFA, "13": CONMEBOL, "11": CONMEBOL, "17": MARKET_ONLY, "18": MARKET_ONLY, "5": MARKET_ONLY };
 export const CROSS_MARKET_WEIGHT = 0.9;
 
 // Competitions that mix leagues (and friendlies/internationals) — never a team's home league.

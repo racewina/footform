@@ -116,6 +116,7 @@ export const LEAGUES = [
   { id: "2", name: "Champions League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "3", name: "Europa League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "848", name: "Conference League", country: "Europe", tier: 1, flag: "🇪🇺" },
+  { id: "5", name: "UEFA Nations League", country: "Europe", tier: 1, flag: "🇪🇺" },
   { id: "13", name: "CONMEBOL Libertadores", country: "South America", tier: 1, flag: "🌎" },
   { id: "11", name: "CONMEBOL Sudamericana", country: "South America", tier: 1, flag: "🌎" },
   { id: "17", name: "AFC Champions League Elite", country: "Asia", tier: 1, flag: "🌏" },
