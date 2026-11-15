@@ -41,7 +41,7 @@ import { loadSnapshot, saveSnapshot } from "../services/snapshot.js";
 import { LEAGUES, LEAGUES_BY_ID, NO_BET_COUNTRIES, NO_BET_LEAGUES, continentFor } from "../data/leagues.js";
 import { parseQuery, CHAT_MARKETS, TOP_EUROPE_IDS, CONTINENT_OF_SCOPE, CUP_RX, normText } from "../services/chatbot.js";
 import { EUROPE_TOP5_IDS, EUROPE_OTHER_IDS } from "../data/botLeagues.js";
-import { crossLeagueTilt, isCrossLeague, CROSS_MARKET_WEIGHT } from "../services/crossLeague.js";
+import { crossLeagueTilt, isCrossLeague, marketWeightFor } from "../services/crossLeague.js";
 import { blendCandidates, buildBookAccumulator } from "../services/blend.js";
 
 const router = express.Router();
@@ -595,9 +595,9 @@ async function buildLeagueDay(leagueId, targetDate, tz) {
       ? { home: elo.ratingBefore(fx.homeTeam.id, fx.startTimestamp), away: elo.ratingBefore(fx.awayTeam.id, fx.startTimestamp) }
       : null;
     fx.prediction = computePrediction(homeForm, awayForm, eloRatings, baselines, { ...decayFor(fx.startTimestamp), formWeight: sampleAwareFormWeight(elo, fx.homeTeam.id, fx.awayTeam.id, fx.startTimestamp), goalTilt: crossLeagueTilt(leagueId, eventsMap[fx.homeTeam.id], eventsMap[fx.awayTeam.id]) });
-    // Cross-league cups: the bookmaker prices league strength far better than our
-    // domestic-form model, so lean 90% on it there (see services/crossLeague.js).
-    if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id], isCrossLeague(leagueId) ? CROSS_MARKET_WEIGHT : undefined);
+    // Cross-league cups (and the few leagues where our model shows no skill): the
+    // bookmaker prices them far better, so lean 90% on it there (services/crossLeague.js).
+    if (oddsMap[fx.id]) fx.prediction = blendPrediction(fx.prediction, oddsMap[fx.id], marketWeightFor(leagueId));
   }
 
   const result = { league, date: targetDate, season: season.name, fixtures };
@@ -3324,7 +3324,7 @@ function askScope(params, tz, { betSafe = false, allow = null } = {}) {
     const out = [];
     if (params.scope === "league" && params.leagueId && !allow.has(String(params.leagueId))) out.push(`${params.leagueName || "That league"} isn't featured in the bot.`);
     for (const t of inc) if (t.kind === "league" && !t.ids.some((id) => allow.has(String(id)))) out.push(`${t.label} isn't featured in the bot.`);
-    if (out.length) out.push("The bot covers Europe top 5 (UEFA comps + top 5 leagues and their second tiers), the rest of Europe, South America's top flights, and the AFC Champions League Elite/Two.");
+    if (out.length) out.push("The bot covers Europe top 5 (UEFA comps + top 5 leagues and their second and third tiers), the rest of Europe, South America's top flights, and the AFC Champions League Elite/Two.");
     return out;
   };
 

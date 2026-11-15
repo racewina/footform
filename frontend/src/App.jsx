@@ -236,6 +236,8 @@ const LEAGUE_NAMES = {
   "180": { name: "Scottish Championship", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   "140": { name: "La Liga", flag: "🇪🇸" },
   "141": { name: "La Liga 2", flag: "🇪🇸" },
+  "435": { name: "Primera División RFEF - Group 1", flag: "🇪🇸" },
+  "436": { name: "Primera División RFEF - Group 2", flag: "🇪🇸" },
   "135": { name: "Serie A", flag: "🇮🇹" },
   "136": { name: "Serie B", flag: "🇮🇹" },
   "78": { name: "Bundesliga", flag: "🇩🇪" },

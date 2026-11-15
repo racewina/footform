@@ -1,7 +1,8 @@
 // Leagues the Telegram bot features, in four categories (user spec 2026-10-19; AFC added 2026-11-03):
 //
 //   ⭐ Europe top 5 — UEFA club competitions + the top 5 leagues and their second
-//                     tiers (no domestic cups, no 3rd tier or below).
+//                     and third tiers (no domestic cups, no 4th tier or below;
+//                     3rd tiers added 2026-11-15).
 //   🇪🇺 Europe       — every league in the app from any OTHER European country.
 //   🌎 South America — CONMEBOL Libertadores/Sudamericana + each country's top flight
 //                     (no domestic cups, no lower tiers).
@@ -18,9 +19,13 @@ export const TOP5_COUNTRIES = ["England", "Spain", "Italy", "Germany", "France"]
 export const UEFA_IDS = ["2", "3", "848"]; // Champions, Europa, Conference League
 export const CONMEBOL_IDS = ["13", "11"]; // Libertadores, Sudamericana
 export const AFC_IDS = ["17", "18"]; // AFC Champions League Elite, AFC Champions League Two
-// Top-5 top flight + second tier: PL/Championship, La Liga/La Liga 2, Serie A/B,
-// Bundesliga/2. Bundesliga, Ligue 1/Ligue 2.
-const TOP5_LEAGUE_IDS = ["39", "40", "140", "141", "135", "136", "78", "79", "61", "62"];
+// Top-5 top flight + second + third tier: PL/Championship/League One, La Liga/La Liga 2/
+// Primera RFEF (2 groups), Serie A/B/C (3 groups), Bundesliga/2. Bundesliga/3. Liga,
+// Ligue 1/Ligue 2/National.
+const TOP5_LEAGUE_IDS = [
+  "39", "40", "41", "140", "141", "435", "436", "135", "136", "138", "942", "943",
+  "78", "79", "80", "61", "62", "63",
+];
 const CUP_RX = /\b(cup|copa|pokal|coupe|coppa|beker)\b|taça/i;
 
 const existing = (ids) => ids.filter((id) => LEAGUES.some((l) => String(l.id) === id));

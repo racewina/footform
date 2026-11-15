@@ -23,6 +23,8 @@ export const LEAGUES = [
   { id: "180", name: "Scottish Championship", country: "Scotland", tier: 2, flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
   { id: "140", name: "La Liga", country: "Spain", tier: 1, flag: "🇪🇸" },
   { id: "141", name: "La Liga 2", country: "Spain", tier: 2, flag: "🇪🇸" },
+  { id: "435", name: "Primera División RFEF - Group 1", country: "Spain", tier: 3, flag: "🇪🇸" },
+  { id: "436", name: "Primera División RFEF - Group 2", country: "Spain", tier: 3, flag: "🇪🇸" },
   { id: "135", name: "Serie A", country: "Italy", tier: 1, flag: "🇮🇹" },
   { id: "136", name: "Serie B", country: "Italy", tier: 2, flag: "🇮🇹" },
   { id: "138", name: "Serie C - Group A", country: "Italy", tier: 3, flag: "🇮🇹" },

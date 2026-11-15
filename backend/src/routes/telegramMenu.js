@@ -34,7 +34,7 @@ const hoursLabel = () => pushHours().map((h) => `${String(h).padStart(2, "0")}:0
 
 const menuText = () => [
   "⚽ <b>FootForm</b> — here's what I can do:",
-  "<i>Covers ⭐ Europe top 5 (UEFA + top 5 leagues & their 2nd tiers), 🇪🇺 the rest of Europe, 🌎 South America's top flights and 🌏 the AFC Champions League Elite/Two.</i>",
+  "<i>Covers ⭐ Europe top 5 (UEFA + top 5 leagues & their 2nd and 3rd tiers), 🇪🇺 the rest of Europe, 🌎 South America's top flights and 🌏 the AFC Champions League Elite/Two.</i>",
   "",
   "🔎 <b>Find picks</b> — market › day › region › pick a match or all of them",
   "🧮 <b>Build an acca</b> — pick a target price (3+, 5+, 10+…) and I find the legs with the best chance",

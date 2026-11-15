@@ -35,6 +35,16 @@ const NOT_DOMESTIC = new Set(["2", "3", "848", "13", "11", "17", "18", "772", "1
 
 export const isCrossLeague = (leagueId) => Boolean(CROSS_LEAGUE[String(leagueId)]);
 
+// Domestic leagues where our model shows no skill, so they lean on the market the same
+// way. Spain's Primera División RFEF groups (435/436, reserve sides + heavy turnover):
+// on the 197 finished 2026 games the raw model scored 1X2 log loss 1.089 / 1.046 vs
+// 1.055 / 1.056 for flat base rates, and Over 2.5 no better than the base rate.
+const MARKET_LEAN_LEAGUES = new Set(["435", "436"]);
+
+// Market weight for blendPrediction (undefined = its default 40%).
+export const marketWeightFor = (leagueId) =>
+  isCrossLeague(leagueId) || MARKET_LEAN_LEAGUES.has(String(leagueId)) ? CROSS_MARKET_WEIGHT : undefined;
+
 // A team's home league = the most frequent non-cross competition in its recent fixtures.
 export function domesticCountry(events) {
   const counts = {};
